@@ -1,0 +1,15 @@
+{
+  "name": "pi-switchman",
+  "version": "0.1.0",
+  "description": "Context economics engine for pi: entry compression, tiered dispatch, sticky routing",
+  "type": "module",
+  "license": "MIT",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "node --test test/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "^1.4.0",
+    "@earendil-works/pi-coding-agent": "^1.4.0"
+  }
+}
