@@ -75,6 +75,25 @@ export function registerStatusCommand(pi: ExtensionAPI, deps: StatusDeps): void 
 			} else {
 				lines.push("router: off (switchman/auto not registered)");
 			}
+			// Selection watchdog: the router only runs for requests on the virtual
+			// model. If the session's last model_change picked a physical model, the
+			// user thinks auto is active while every request bypasses switchman —
+			// say so explicitly instead of staying silent.
+			try {
+				const branch = ctx.sessionManager.getBranch() as { type?: string; modelId?: string }[];
+			let selected: string | null = null;
+			for (let i = branch.length - 1; i >= 0; i--) {
+					if (branch[i]?.type === "model_change") {
+						selected = branch[i].modelId ?? null;
+					break;
+					}
+				}
+				if (selected !== null && selected !== "auto") {
+					lines.push(`⚠ routing dormant: this session's model is ${selected}, not switchman/auto — gate/relay/decision/lane switching are all bypassed. Select switchman/auto to activate.`);
+				}
+			} catch {
+				/* fail-open */
+			}
 
 			// Compression stats
 			const stats = deps.stats;

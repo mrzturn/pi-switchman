@@ -46,34 +46,22 @@ export function applyWatermark(pi: ExtensionAPI, deps: WatermarkDeps): void {
 		lastTier = "ok";
 	});
 
-	pi.on("turn_end", (_event, ctx) => {
+	pi.on("turn_end", (event, ctx) => {
 		try {
 			const config = deps.config();
 			if (config.disabled) return;
 
-			// Dead-turn continuation. When a provider error kills a response, pi's
-			// post-error threshold compaction compacts but never retries (its Case 3
-			// has no willRetry), so the run dies after showing the error. Structural
-			// check: the branch tail is an errored assistant message immediately
-			// followed by the compaction, with nothing after it. Manual /compact on
-			// a finished turn does not match (stopReason "stop"); our own force-tier
-			// compaction does not match either (its onComplete already continues).
-			const tail = (() => {
-				try {
-					const branch = (ctx.sessionManager.getBranch() as unknown[]) ?? [];
-					return branch.slice(-2) as { type?: string; message?: { role?: string; stopReason?: string } }[];
-				} catch {
-					return [];
-				}
-			})();
-			const [prevEntry, lastEntry] = tail;
-			if (
-				lastEntry?.type === "compaction" &&
-				prevEntry?.type === "message" &&
-				prevEntry.message?.role === "assistant" &&
-				prevEntry.message?.stopReason === "error" &&
-				Date.now() - lastContinueAt > CONTINUE_COOLDOWN_MS
-			) {
+			// Dead-turn continuation. A provider-killed response ends its turn with
+			// stopReason "error"; pi's post-error handling may then run a threshold
+			// compaction that never retries, so without a nudge the run dies with the
+			// error shown to the user. turn_end fires from the finishTurn hook BEFORE
+			// that compaction decision, so we cannot wait for a compaction entry —
+			// queue the continuation now with deliverAs followUp: it rides the live
+			// agent run (pi compacts first if the threshold is hit), or starts the
+			// next run if the run settles first. stopReason "aborted" is the user's
+			// own interrupt — never continue those.
+			const stopReason = (event as { message?: { stopReason?: string } } | undefined)?.message?.stopReason;
+			if (stopReason === "error" && Date.now() - lastContinueAt > CONTINUE_COOLDOWN_MS) {
 				lastContinueAt = Date.now();
 				deps.afterCompact?.(ctx);
 				return; // the turn is dead; tier logic below would misfire on stale usage
