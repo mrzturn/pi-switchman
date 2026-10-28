@@ -96,6 +96,24 @@ function lastUserHasImages(messages: readonly Message[]): boolean {
 	return false;
 }
 
+/** True when the request's newest message carries image content: a user
+ *  attachment or an image-bearing tool result (e.g. the read tool on a png).
+ *  Drives the image capability gate — a text-only model silently drops images. */
+function lastMessageHasImages(messages: readonly Message[]): boolean {
+	const last = messages[messages.length - 1];
+	if (last === undefined) return false;
+	if (last.role === "user") {
+		return Array.isArray(last.content) && last.content.some((part) => part.type === "image");
+	}
+	if (last.role === "toolResult") {
+		const results = (last as { results?: { content?: unknown }[] }).results ?? [];
+		return results.some(
+			(result) => Array.isArray(result.content) && result.content.some((part) => (part as { type?: string }).type === "image"),
+		);
+	}
+	return false;
+}
+
 /** The classifier decision (guarded: every failure path returns null so the
  *  builtin baseline takes over — decision model down never blocks routing). */
 export async function classifyDecision(
@@ -168,6 +186,54 @@ export async function routeCore(deps: RouterDeps, request: RouteRequestLike): Pr
 		state,
 	});
 
+	// 0. Image capability gate — a request carrying images (user attachment
+	//    or an image tool result) must land on an image-capable model. This
+	//    outranks platform stickiness, decision-interval reuse, and the
+	//    classifier: a text-only model silently drops the images.
+	const available = (() => {
+		try {
+			return deps.registry.getAvailable();
+		} catch {
+			return [];
+		}
+	})();
+	if (lastMessageHasImages(request.messages)) {
+		const prevFacts =
+			prevRef !== null ? available.find((m) => m.provider === prevRef.provider && m.id === prevRef.model) : undefined;
+		if (prevFacts !== undefined && prevFacts.input.includes("image")) {
+			return keepPrev(); // already image-capable: keep the cache window intact
+		}
+		const imageRefs: ModelRef[] = [];
+		const seen = new Set<string>();
+		const pushIfCapable = (facts: ModelFacts | undefined) => {
+			if (facts === undefined || !facts.input.includes("image")) return;
+			const key = `${facts.provider}/${facts.id}`;
+			if (seen.has(key)) return;
+			seen.add(key);
+			imageRefs.push({ provider: facts.provider, model: facts.id });
+		};
+		for (const ref of laneCandidates("vision", config, available)) {
+			pushIfCapable(available.find((m) => m.provider === ref.provider && m.id === ref.model));
+		}
+		for (const facts of available) pushIfCapable(facts);
+		const pick = imageRefs[0];
+		if (pick !== undefined) {
+			routerStats.lastDecision = { ts: now, by: "builtin", lane: "vision", confidence: 1, kept: false };
+			return {
+				ref: pick,
+				thinking: request.thinkingLevel,
+				state: {
+					lane: "vision",
+					lastPhysical: pick,
+					lastSwitchTs: now,
+					decision: { ts: now, by: "builtin", lane: "vision", confidence: 1 },
+				},
+			};
+		}
+		// No image-capable model available: fail-open — route normally below
+		// (pi strips images for text-only models, exactly as without switchman).
+	}
+
 	// 1. Platform stickiness first — continuation keeps the cache, retry keeps
 	//    the thinking signature.
 	if (request.reason === "continuation" && prevRef !== null) return keepPrev();
@@ -181,13 +247,6 @@ export async function routeCore(deps: RouterDeps, request: RouteRequestLike): Pr
 
 	// 2. Lane decision at user boundaries (dual decoder); direct requests
 	//    (compaction summaries & friends) ride the economy lane.
-	const available = (() => {
-		try {
-			return deps.registry.getAvailable();
-		} catch {
-			return [];
-		}
-	})();
 	const liveLanes = LANE_NAMES.filter((lane) => laneCandidates(lane, config, available).length > 0);
 
 	let lane: LaneName = "main";

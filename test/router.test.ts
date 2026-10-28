@@ -19,18 +19,22 @@ function factsOf(id: string, provider = "p") {
 }
 
 const MODELS = [factsOf("model-heavy"), factsOf("model-flash"), factsOf("model-mid")];
+const IMAGE_MODEL = { ...factsOf("model-vision", "p2"), input: ["text" as const, "image" as const] };
 
-function fakeRegistry(options: {
-	classifyResult?: { stopReason: string; answers?: Record<string, unknown> };
-	classifyThrows?: boolean;
-} = {}): RegistryLike & { classifyCalls: number } {
+function fakeRegistry(
+	options: {
+		classifyResult?: { stopReason: string; answers?: Record<string, unknown> };
+		classifyThrows?: boolean;
+		models?: typeof MODELS;
+	} = {},
+): RegistryLike & { classifyCalls: number } {
 	let classifyCalls = 0;
 	return {
 		classifyCalls: 0,
 		get available() {
 			return this.getAvailable();
 		},
-		getAvailable: () => MODELS,
+		getAvailable: () => options.models ?? MODELS,
 		find: (provider, id) => MODELS.find((m) => m.provider === provider && m.id === id),
 		findOfType: () => ({}),
 		async classify(_model, _context, _options) {
@@ -148,4 +152,57 @@ test("empty catalog fails over to previous, then to anything available", async (
 	const previous = { model: { provider: "p", id: "model-mid" }, thinkingLevel: "medium" as never };
 	const keep = await routeCore({ config: () => CONFIG, registry }, request({ previous }));
 	assert.deepEqual(keep.ref, { provider: "p", model: "model-mid" });
+});
+
+// ---- image capability gate ----------------------------------------------------
+
+const userImageRequest = request({
+	messages: [
+		{ role: "user", content: [{ type: "text", text: "what is in this" }, { type: "image" as never, source: {} as never }], timestamp: Date.now() },
+	] as never,
+});
+const toolImageRequest = request({
+	reason: "continuation",
+	messages: [
+		{ role: "user", content: [{ type: "text", text: "read the png" }], timestamp: Date.now() },
+		{ role: "assistant", content: [{ type: "text", text: "reading" }], timestamp: Date.now() },
+		{ role: "toolResult", results: [{ content: [{ type: "image" as never, source: {} as never }] }] },
+	] as never,
+});
+
+test("image gate: user attachment overrides continuation stickiness and routes to a vision model", async () => {
+	const registry = fakeRegistry({ models: [...MODELS, IMAGE_MODEL] });
+	const previous = { model: { provider: "p", id: "model-mid" }, thinkingLevel: "high" as never };
+	const outcome = await routeCore({ config: () => CONFIG, registry }, { ...toolImageRequest, previous });
+	assert.deepEqual(outcome.ref, { provider: "p2", model: "model-vision" });
+	assert.equal(outcome.state?.lane, "vision");
+	assert.equal(registry.classifyCalls, 0); // gate short-circuits the classifier
+});
+
+test("image gate: image-capable previous model keeps the cache", async () => {
+	const registry = fakeRegistry({ models: [...MODELS, IMAGE_MODEL] });
+	const previous = { model: { provider: "p2", id: "model-vision" }, thinkingLevel: "medium" as never };
+	const outcome = await routeCore({ config: () => CONFIG, registry }, { ...userImageRequest, previous });
+	assert.deepEqual(outcome.ref, { provider: "p2", model: "model-vision" });
+	assert.equal(registry.classifyCalls, 0);
+});
+
+test("image gate: overrides decision-interval lane reuse", async () => {
+	const registry = fakeRegistry({ models: [...MODELS, IMAGE_MODEL] });
+	const outcome = await routeCore(
+		{ config: () => CONFIG, registry },
+		{
+			...userImageRequest,
+			state: { lane: "main", lastPhysical: { provider: "p", model: "model-heavy" }, lastSwitchTs: Date.now(), decision: { ts: Date.now(), by: "classifier", lane: "main", confidence: 0.95 } },
+		},
+	);
+	assert.equal(outcome.ref.model, "model-vision");
+});
+
+test("image gate: fail-open when no image-capable model exists", async () => {
+	const registry = fakeRegistry(); // all text models
+	const outcome = await routeCore({ config: () => CONFIG, registry }, userImageRequest);
+	// normal routing path runs (classifier picks main); images are stripped downstream
+	assert.equal(outcome.ref.model, "model-heavy");
+	assert.equal(registry.classifyCalls, 1);
 });
