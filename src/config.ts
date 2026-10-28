@@ -43,6 +43,19 @@ export interface Anchor extends ModelRef {
 	tier: AnchorTier;
 }
 
+/** A local decision endpoint registered as a provider at load time
+ *  (typesafe-system-one compatible, e.g. an Ollama-exposed systemone service). */
+export interface DecisionEndpoint {
+	/** Provider id to register (e.g. "switchman-decision"). */
+	provider: string;
+	/** Base URL of the systemone endpoint (e.g. http://127.0.0.1:11434/v1/systemone). */
+	baseUrl: string;
+	/** Classifier model id served by the endpoint (e.g. "tev1:4b-mxfp8"). */
+	model: string;
+	/** Optional literal API key; local endpoints need none. */
+	apiKey?: string;
+}
+
 export interface RouterConfig {
 	/** Register the switchman/auto virtual model. */
 	enabled: boolean;
@@ -58,6 +71,8 @@ export interface RouterConfig {
 	decisionTimeoutMs: number;
 	/** Optional classifier used for lane decisions; null = builtin rules only. */
 	decisionModel: ModelRef | null;
+	/** Optional local decision endpoint; registered as a provider at load. */
+	decisionEndpoint: DecisionEndpoint | null;
 }
 
 export interface SwitchmanConfig {
@@ -92,6 +107,7 @@ export const DEFAULT_CONFIG: SwitchmanConfig = {
 		decisionIntervalMs: 60_000,
 		decisionTimeoutMs: 2000,
 		decisionModel: null,
+		decisionEndpoint: null,
 	},
 };
 
@@ -195,6 +211,21 @@ export function mergeConfig(base: SwitchmanConfig, override: Record<string, unkn
 			}
 		}
 		const decision = modelRefOf(router.decisionModel);
+		// decisionEndpoint: absent key inherits the base (global) value; explicit
+		// null clears; an object must pass validation or falls back to null.
+		let endpoint = base.router.decisionEndpoint;
+		if ("decisionEndpoint" in router) {
+			const raw = router.decisionEndpoint;
+			if (raw === null || !isPlainObject(raw)) {
+				endpoint = null;
+			} else {
+				const provider = typeof raw.provider === "string" ? raw.provider.trim() : "";
+				const baseUrl = typeof raw.baseUrl === "string" ? raw.baseUrl.trim() : "";
+				const model = typeof raw.model === "string" ? raw.model.trim() : "";
+				const apiKey = typeof raw.apiKey === "string" && raw.apiKey.length > 0 ? raw.apiKey : undefined;
+				endpoint = provider !== "" && baseUrl !== "" && model !== "" ? { provider, baseUrl, model, ...(apiKey !== undefined ? { apiKey } : {}) } : null;
+			}
+		}
 		out.router = {
 			enabled: boolOr(router, "enabled", base.router.enabled),
 			lanes,
@@ -203,6 +234,7 @@ export function mergeConfig(base: SwitchmanConfig, override: Record<string, unkn
 			decisionIntervalMs: intOr(router, "decisionIntervalMs", base.router.decisionIntervalMs),
 			decisionTimeoutMs: intOr(router, "decisionTimeoutMs", base.router.decisionTimeoutMs),
 			decisionModel: router.decisionModel === null ? null : decision,
+			decisionEndpoint: endpoint,
 		};
 	}
 	return out;

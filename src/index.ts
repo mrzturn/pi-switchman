@@ -22,7 +22,8 @@ import { PROTOCOL_SECTION_KEY, protocolText } from "./protocol.ts";
 import { createExpandTool } from "./expand.ts";
 import { createDispatchTool } from "./dispatch.ts";
 import { registerRouter } from "./router.ts";
-import { applyWatermark, type WatermarkTier } from "./watermark.ts";
+import { registerDecisionEndpoint } from "./decision-model.ts";
+import { applyWatermark, AUTO_CONTINUE_MESSAGE, type WatermarkTier } from "./watermark.ts";
 import { registerConfigCommand, saveTarget } from "./config-ui.ts";
 import { registerStatusCommand, Stats } from "./status.ts";
 
@@ -145,6 +146,17 @@ export default function (pi: ExtensionAPI) {
 
 	// ---- [M3a/M3b] router + decision model ------------------------------------
 
+	function syncDecisionEndpoint(cwd: string): void {
+		try {
+			const endpoint = configFor(cwd).config.router.decisionEndpoint;
+			if (endpoint !== null) registerDecisionEndpoint(pi, endpoint);
+		} catch {
+			/* fail-open: registered on next start */
+		}
+	}
+	syncDecisionEndpoint(process.cwd());
+	pi.on("session_start", (_event, ctx) => syncDecisionEndpoint(ctx.cwd)); // project overrides may add one
+
 	try {
 		registerRouter(pi, { config: cfgNow, enabled: () => cfgNow().router.enabled && !cfgNow().disabled });
 	} catch (error) {
@@ -166,6 +178,15 @@ export default function (pi: ExtensionAPI) {
 		onTier: (tier) => {
 			watermarkTier = tier;
 		},
+		afterCompact: (ctx) => {
+			// Auto-continue: queue a user turn right after the force-tier
+			// compaction so the agent resumes without waiting for the human.
+			try {
+				ctx.sendUserMessage(AUTO_CONTINUE_MESSAGE);
+			} catch {
+				/* fail-open */
+			}
+		},
 	});
 
 	// ---- [F] config TUI + status ----------------------------------------------
@@ -178,6 +199,7 @@ export default function (pi: ExtensionAPI) {
 			writeRawConfig(target, patch);
 			return target;
 		},
+		registerEndpoint: (entry) => registerDecisionEndpoint(pi, entry),
 	});
 
 	registerStatusCommand(pi, {

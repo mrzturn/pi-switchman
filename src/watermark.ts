@@ -21,11 +21,19 @@ export function tierOf(percent: number, config: WatermarkConfig): WatermarkTier 
 
 const COMPACT_COOLDOWN_MS = 10 * 60 * 1000;
 
+/** Byte-stable continuation message sent as the user after a force-tier
+ *  compaction, so the agent resumes the interrupted task without waiting
+ *  for the human (pi serializes the queued turn behind the compaction). */
+export const AUTO_CONTINUE_MESSAGE =
+	"[SWITCHMAN:CONTINUE] Context was just compacted automatically; the dispatch ledger and routing state are preserved. Continue the interrupted task from where it stopped (re-orient via the switchman:ledger entries if needed). If nothing remains pending, reply that you are standing by.";
+
 export interface WatermarkDeps {
 	config: () => { watermark: WatermarkConfig; compress: { hardRatio: number }; disabled: boolean };
 	setThresholdScale: (scale: number) => void;
 	/** Observes every tier transition (status display). */
 	onTier?: (tier: WatermarkTier) => void;
+	/** Fired right after a force-tier compaction is triggered (auto-continue). */
+	afterCompact?: (ctx: ExtensionContext) => void;
 }
 
 export function applyWatermark(pi: ExtensionAPI, deps: WatermarkDeps): void {
@@ -67,6 +75,11 @@ export function applyWatermark(pi: ExtensionAPI, deps: WatermarkDeps): void {
 					ctx.compact({
 						customInstructions: `[SWITCHMAN] Preserve the dispatch ledger (recent dispatches below) and the current routing lane when summarizing. Recent dispatches:\n${pending}`,
 					});
+					try {
+						deps.afterCompact?.(ctx); // auto-continue: queue the next turn without user input
+					} catch {
+						/* fail-open */
+					}
 				}
 			}
 			lastTier = tier;

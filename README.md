@@ -14,7 +14,7 @@
 | **[B] 执行矩阵** | `dispatch` 工具四模式：`gather`（内嵌只读步骤编排，过程零入栈）/ `judge`（泳道模型单发裁决）/ `run`（隔离子进程 subagent）/ `parallel`（≤8 任务并行）；每次派发入台账（防重复派发 + 压缩保真） |
 | **[C] sticky 路由** | `switchman/auto` 虚拟模型：continuation/retry 粘滞保缓存；user 边界双决策器（本地决策模型 + 内置规则打底）判泳道；缓存窗口 + 置信度双闸决定换/留 |
 | **[D] 能力知识层** | 候选集活目录现查；锚点 > 名字/价格启发式推断 > 目录顺序；泳道未配置自动排序 |
-| **[E] 水位** | soft→引导派发 / hard→压缩收紧 / force→台账感知的定制 compaction（10 分钟冷却） |
+| **[E] 水位** | soft→引导派发 / hard→压缩收紧 / force→台账感知的定制 compaction 并自动接续（不等用户说话，10 分钟冷却） |
 | **[F] TUI 配置** | `/switchman-config`：泳道×有序模型表（↑↓调序）、决策模型选择、即存即生效；JSON 文件永远可手改 |
 
 出厂 agents：`scout`（侦查）/ `reviewer`（独立复审）/ `tester`（测试分诊）/ `worker`（通用实现）。
@@ -46,12 +46,19 @@ for f in agents/*.md; do ln -s "$(pwd)/$f" ~/.pi/agent/agents/$(basename "$f"); 
     "lanes": { "hard": [{ "provider": "anthropic", "model": "claude-opus-4-5" }] },
     "switchConfidence": 0.8,
     "cacheWindowMs": 300000,
-    "decisionModel": { "provider": "ollama-local", "model": "tev1:4b-mxfp8" }
+    "decisionEndpoint": {
+      "provider": "switchman-decision",
+      "baseUrl": "http://127.0.0.1:11434/v1/systemone",
+      "model": "tev1:4b-mxfp8"
+    }
   }
 }
 ```
 
-**本地决策模型**：pi 原生支持 `typesafe-system-one` classifier——在 `~/.pi/agent/models.json` 给本地端点（如 Ollama 暴露的 systemone 决策端点）注册 classifier，`decisionModel` 指向它即可；决策端点挂掉自动落回内置规则链，路由永不断。
+**本地决策模型**：两种配置部路——
+- **TUI**：`/switchman-config` → decision 行 → `── add local endpoint (provider + model)…`，填 provider 名、systemone 端点 URL、模型 id（可选 API key），确认即保存并立即注册（无需重启）；
+- **手改 JSON**：如上例的 `router.decisionEndpoint`，扩展启动时自动注册为 typesafe-system-one classifier，`decisionModel` 会同步指向它。
+端点挂掉自动落回内置规则链，路由永不断；也可不用本地端点，直接在 models.json 注册任意 classifier 后在 TUI 选择。
 
 ## 开发
 

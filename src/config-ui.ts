@@ -6,9 +6,10 @@
 
 import { existsSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { Anchor, LaneName, LoadedConfig, ModelRef, RouterConfig } from "./config.ts";
+import type { Anchor, DecisionEndpoint, LaneName, LoadedConfig, ModelRef, RouterConfig } from "./config.ts";
 import { LANE_NAMES } from "./config.ts";
 import { inferTier, type ModelFacts, type Tier } from "./capability.ts";
+import { validEndpoint } from "./decision-model.ts";
 
 const LANE_DESCRIPTIONS: Record<LaneName, string> = {
 	hard: "high-stakes reasoning and large refactors",
@@ -69,11 +70,51 @@ export function filterModels<T extends { provider: string; id: string }>(models:
 	return matched.slice(0, limit);
 }
 
+// ---- decision view rows (test-locked) ------------------------------------------
+
+export interface DecisionOptionRow {
+	label: string;
+	action: "none" | "classifier" | "endpoint" | "removeEndpoint";
+	provider?: string;
+	id?: string;
+}
+
+export function decisionRows(
+	classifiers: readonly { provider: string; id: string; name: string }[],
+	filter: string,
+	endpoint: DecisionEndpoint | null,
+): DecisionOptionRow[] {
+	const rows: DecisionOptionRow[] = [{ label: "(none — builtin rules only)", action: "none" }];
+	for (const model of filterModels(classifiers, filter)) {
+		rows.push({ label: `${model.provider}/${model.id} ${model.name}`, action: "classifier", provider: model.provider, id: model.id });
+	}
+	rows.push(
+		endpoint === null
+			? { label: "── add local endpoint (provider + model)…", action: "endpoint" }
+			: { label: `── edit local endpoint (${endpoint.provider})…`, action: "endpoint" },
+	);
+	if (endpoint !== null) rows.push({ label: "── remove local endpoint", action: "removeEndpoint" });
+	return rows;
+}
+
+export const ENDPOINT_FIELDS = ["provider", "endpoint URL", "model id", "API key"] as const;
+
+export function endpointPrefill(endpoint: DecisionEndpoint | null): string[] {
+	return [
+		endpoint?.provider ?? "switchman-decision",
+		endpoint?.baseUrl ?? "http://127.0.0.1:11434/v1/systemone",
+		endpoint?.model ?? "",
+		endpoint?.apiKey ?? "",
+	];
+}
+
 // ---- registration ----------------------------------------------------------------
 
 export interface ConfigUiDeps {
 	config: () => LoadedConfig;
 	save: (patch: Record<string, unknown>) => string;
+	/** Registers a decision endpoint provider immediately after save. */
+	registerEndpoint?: (entry: DecisionEndpoint) => boolean;
 }
 
 export function registerConfigCommand(pi: ExtensionAPI, deps: ConfigUiDeps): void {
@@ -111,12 +152,15 @@ export function registerConfigCommand(pi: ExtensionAPI, deps: ConfigUiDeps): voi
 			}
 			const anchors = loaded.config.anchors;
 
-			type View = { name: "main" } | { name: "lane"; lane: LaneName } | { name: "pick"; lane: LaneName } | { name: "decision" };
+			type View = { name: "main" } | { name: "lane"; lane: LaneName } | { name: "pick"; lane: LaneName } | { name: "decision" } | { name: "endpoint" };
 			let view: View = { name: "main" };
 			let cursor = 0;
 			let filter = "";
 			let saved = false;
 			let dirty = false;
+			let fields = endpointPrefill(working.decisionEndpoint);
+			let fieldCursor = 0;
+			let endpointError: string | null = null;
 
 			const rowsForView = (): { labels: string[]; actions: string[] } => {
 				if (view.name === "main") {
@@ -134,8 +178,13 @@ export function registerConfigCommand(pi: ExtensionAPI, deps: ConfigUiDeps): voi
 						actions: models.map(() => "model"),
 					};
 				}
-				const options = ["(none — builtin rules only)", ...filterModels(classifiers, filter).map((c) => `${c.provider}/${c.id} ${c.name}`)];
-				return { labels: options, actions: options.map(() => "option") };
+				if (view.name === "decision") {
+					const rows = decisionRows(classifiers, filter, working.decisionEndpoint);
+					return { labels: rows.map((row) => row.label), actions: rows.map((row) => row.action) };
+				}
+				// endpoint editor: one row per field
+				const labels = ENDPOINT_FIELDS.map((name, index) => `${index === fieldCursor ? "▸ " : "  "}${name.padEnd(14)} ${fields[index]}`);
+				return { labels, actions: labels.map(() => "field") };
 			};
 
 			const decision = await ctx.ui.custom<boolean>((tui, theme, keybindings, done) => {
@@ -156,19 +205,27 @@ export function registerConfigCommand(pi: ExtensionAPI, deps: ConfigUiDeps): voi
 									? `Switchman — lane "${view.lane}" (${LANE_DESCRIPTIONS[view.lane]})`
 									: view.name === "pick"
 										? `Switchman — add model to "${(view as { lane: LaneName }).lane}"  (type to filter: "${filter}")`
-										: "Switchman — decision model";
+										: view.name === "endpoint"
+											? "Switchman — local decision endpoint"
+											: "Switchman — decision model";
 						const help =
 							view.name === "main"
 								? "enter edit · s save · esc quit"
 								: view.name === "lane"
 									? "u/d move · x remove · enter add · esc back"
-									: "type filter · enter pick · esc back";
+									: view.name === "endpoint"
+										? "type to edit · enter next/confirm · esc back"
+										: "type filter · enter pick · esc back";
 						const lines = [
 							theme.fg("accent", title),
-							...labels.map((label, index) => `${index === cursor ? "> " : "  "}${label}`),
+							...labels.map((label, index) => `${index === cursor && view.name !== "endpoint" ? "> " : "  "}${label}`),
 							theme.fg("dim", help),
-							theme.fg("dim", dirty ? "unsaved changes — press s to save" : " "),
 						];
+							lines.push(
+								view.name === "endpoint" && endpointError !== null
+									? theme.fg("error", endpointError)
+									: theme.fg("dim", dirty ? "unsaved changes — press s to save" : " "),
+						);
 						cachedLines = lines.map((line) => (line.length > width ? `${line.slice(0, Math.max(0, width - 1))}…` : line));
 						return cachedLines;
 					},
@@ -181,12 +238,14 @@ export function registerConfigCommand(pi: ExtensionAPI, deps: ConfigUiDeps): voi
 						};
 
 						if (keybindings.matches(data, "tui.select.up")) {
-							cursor = cursor <= 0 ? maxIndex : cursor - 1;
+							if (view.name === "endpoint") fieldCursor = fieldCursor <= 0 ? ENDPOINT_FIELDS.length - 1 : fieldCursor - 1;
+							else cursor = cursor <= 0 ? maxIndex : cursor - 1;
 							invalidate();
 							return;
 						}
 						if (keybindings.matches(data, "tui.select.down")) {
-							cursor = cursor >= maxIndex ? 0 : cursor + 1;
+							if (view.name === "endpoint") fieldCursor = fieldCursor >= ENDPOINT_FIELDS.length - 1 ? 0 : fieldCursor + 1;
+							else cursor = cursor >= maxIndex ? 0 : cursor + 1;
 							invalidate();
 							return;
 						}
@@ -195,13 +254,32 @@ export function registerConfigCommand(pi: ExtensionAPI, deps: ConfigUiDeps): voi
 								done(false);
 								return;
 							}
-							view = view.name === "pick" ? { name: "lane", lane: view.lane } : { name: "main" };
+							view =
+								view.name === "pick"
+									? { name: "lane", lane: view.lane }
+									: view.name === "endpoint"
+										? { name: "decision" }
+										: { name: "main" };
 							filter = "";
 							cursor = 0;
 							invalidate();
 							return;
 						}
-						if (view.name === "pick" || view.name === "decision") {
+						if (view.name === "endpoint") {
+							// printable chars edit the focused field; backspace erases.
+							if (data === "\x7f" || data === "\b") {
+								fields[fieldCursor] = fields[fieldCursor].slice(0, -1);
+								endpointError = null;
+								invalidate();
+								return;
+							}
+							if (data.length === 1 && data >= " " && !keybindings.matches(data, "tui.select.confirm")) {
+								fields[fieldCursor] += data;
+								endpointError = null;
+								invalidate();
+								return;
+							}
+						} else if (view.name === "pick" || view.name === "decision") {
 							// printable chars build the filter; backspace erases.
 							if (data === "\x7f" || data === "\b") {
 								filter = filter.slice(0, -1);
@@ -256,13 +334,64 @@ export function registerConfigCommand(pi: ExtensionAPI, deps: ConfigUiDeps): voi
 								invalidate();
 								return;
 							}
-							// decision picker
-							if (cursor === 0) {
+							// endpoint editor: enter advances fields, confirms on the last
+							if (view.name === "endpoint") {
+								if (fieldCursor < ENDPOINT_FIELDS.length - 1) {
+									fieldCursor++;
+									endpointError = null;
+									invalidate();
+									return;
+								}
+								const entry: DecisionEndpoint = {
+									provider: fields[0].trim(),
+									baseUrl: fields[1].trim(),
+									model: fields[2].trim(),
+									...(fields[3].trim() !== "" ? { apiKey: fields[3].trim() } : {}),
+								};
+								const problem = validEndpoint(entry);
+								if (problem !== null) {
+									endpointError = problem;
+									invalidate();
+									return;
+								}
+								working.decisionEndpoint = entry;
+								working.decisionModel = { provider: entry.provider, model: entry.model };
+								dirty = true;
+								endpointError = null;
+								view = { name: "main" };
+								cursor = 0;
+								invalidate();
+								return;
+							}
+							// decision picker: rows carry their own actions
+							const rows = decisionRows(classifiers, filter, working.decisionEndpoint);
+							const row = rows[Math.min(cursor, rows.length - 1)];
+							if (row === undefined) return;
+							if (row.action === "endpoint") {
+								fields = endpointPrefill(working.decisionEndpoint);
+								fieldCursor = 0;
+								endpointError = null;
+								view = { name: "endpoint" };
+								filter = "";
+								cursor = 0;
+								invalidate();
+								return;
+							}
+							if (row.action === "removeEndpoint") {
+								const removed = working.decisionEndpoint;
+								working.decisionEndpoint = null;
+								if (removed !== null && working.decisionModel !== null && working.decisionModel.provider === removed.provider) {
+									working.decisionModel = null;
+								}
+								dirty = true;
+								cursor = 0;
+								invalidate();
+								return;
+							}
+							if (row.action === "none") {
 								working.decisionModel = null;
-							} else {
-								const choice = filterModels(classifiers, filter)[cursor - 1];
-								if (choice === undefined) return;
-								working.decisionModel = { provider: choice.provider, model: choice.id };
+							} else if (row.action === "classifier" && row.provider !== undefined && row.id !== undefined) {
+								working.decisionModel = { provider: row.provider, model: row.id };
 							}
 							dirty = true;
 							view = { name: "main" };
@@ -314,8 +443,17 @@ export function registerConfigCommand(pi: ExtensionAPI, deps: ConfigUiDeps): voi
 			});
 
 			if (decision && saved) {
-				const target = deps.save({ router: { lanes: working.lanes, decisionModel: working.decisionModel } });
-				ctx.ui.notify(`switchman config saved to ${target}`, "info");
+const target = deps.save({
+				router: { lanes: working.lanes, decisionModel: working.decisionModel, decisionEndpoint: working.decisionEndpoint },
+			});
+			let message = `switchman config saved to ${target}`;
+			if (working.decisionEndpoint !== null && deps.registerEndpoint !== undefined) {
+				const ok = deps.registerEndpoint(working.decisionEndpoint);
+				message += ok
+					? `; decision endpoint ${working.decisionEndpoint.provider}/${working.decisionEndpoint.model} registered`
+					: "; decision endpoint saved (registers on next start)";
+			}
+			ctx.ui.notify(message, "info");
 			} else if (!decision) {
 				ctx.ui.notify("switchman config closed without saving", "info");
 			}
