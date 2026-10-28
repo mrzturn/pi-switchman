@@ -72,14 +72,22 @@ export function applyWatermark(pi: ExtensionAPI, deps: WatermarkDeps): void {
 						/* advisory */
 					}
 					notify(ctx, `switchman: force tier (${Math.round(usage.percent)}%) — compacting with dispatch ledger`, "warning");
+					// fire-and-forget: compact() is async and rejects prompt() while in
+					// progress ("Cannot submit a prompt while compaction is in progress"),
+					// so the auto-continue must ride onComplete — after the abort gate clears.
 					ctx.compact({
 						customInstructions: `[SWITCHMAN] Preserve the dispatch ledger (recent dispatches below) and the current routing lane when summarizing. Recent dispatches:\n${pending}`,
+						onComplete: () => {
+							try {
+								deps.afterCompact?.(ctx); // auto-continue: queue the next turn without user input
+							} catch {
+								/* fail-open */
+							}
+						},
+						onError: (error) => {
+							notify(ctx, `switchman: force-tier compaction failed (${error.message}) — auto-continue skipped`, "warning");
+						},
 					});
-					try {
-						deps.afterCompact?.(ctx); // auto-continue: queue the next turn without user input
-					} catch {
-						/* fail-open */
-					}
 				}
 			}
 			lastTier = tier;

@@ -107,8 +107,9 @@ test("watermark: force tier compacts once and fires the auto-continue", async ()
 	const ctx = {
 		hasUI: false,
 		getContextUsage: () => ({ percent: 0.96 }),
-		compact: () => {
+		compact: (options?: { onComplete?: (result: unknown) => void }) => {
 			compacted++;
+			options?.onComplete?.({}); // continuation rides onComplete — the prompt gate is still closed during compact()
 		},
 		sessionManager: {}, // getBranch() missing -> ledger summary fails open
 	} as never;
