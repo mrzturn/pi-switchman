@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DEFAULT_CONFIG, mergeConfig } from "../src/config.ts";
-import { buildDecisionProviderConfig, registerDecisionEndpoint, validEndpoint } from "../src/decision-model.ts";
+import { buildDecisionProviderConfig, normalizeDecisionBaseUrl, registerDecisionEndpoint, validEndpoint } from "../src/decision-model.ts";
 import { decisionRows, endpointPrefill, ENDPOINT_FIELDS } from "../src/config-ui.ts";
 import { AUTO_CONTINUE_MESSAGE, applyWatermark } from "../src/watermark.ts";
 
@@ -31,6 +31,20 @@ test("buildDecisionProviderConfig: systemone classifier, local key fallback", ()
 
 	const keyed = buildDecisionProviderConfig({ provider: "sw", baseUrl: "http://x", model: "m", apiKey: "sk-1" });
 	assert.equal(keyed.apiKey, "sk-1");
+});
+
+test("normalizeDecisionBaseUrl: dsh-style full endpoint and bare base both land on the transport base", () => {
+	// pi's typesafe-system-one transport appends the `systemone` segment itself:
+	// new URL("systemone", baseUrl + "/"). A dsh-style FULL endpoint URL (what
+	// dsh calls directly) must be stripped, or the request hits /v1/systemone/systemone.
+	assert.equal(normalizeDecisionBaseUrl("http://127.0.0.1:11434/v1/systemone"), "http://127.0.0.1:11434/v1");
+	assert.equal(normalizeDecisionBaseUrl("http://127.0.0.1:11434/v1/systemone/"), "http://127.0.0.1:11434/v1");
+	assert.equal(normalizeDecisionBaseUrl("http://127.0.0.1:11434/v1"), "http://127.0.0.1:11434/v1");
+	assert.equal(normalizeDecisionBaseUrl("http://127.0.0.1:11434/v1///"), "http://127.0.0.1:11434/v1");
+	assert.equal(normalizeDecisionBaseUrl("https://api.example.com/systemone/systemone"), "https://api.example.com/systemone");
+	// user-style full URL flows through the provider config normalized
+	const config = buildDecisionProviderConfig({ provider: "sw", baseUrl: "http://127.0.0.1:11434/v1/systemone", model: "d3:4b-mxfp8" });
+	assert.equal(config.baseUrl, "http://127.0.0.1:11434/v1");
 });
 
 test("registerDecisionEndpoint: fail-open on invalid input and pi rejection", () => {

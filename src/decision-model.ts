@@ -15,6 +15,17 @@ export function validEndpoint(entry: { provider: string; baseUrl: string; model:
 	return null;
 }
 
+/** Normalizes a decision endpoint URL to the BASE pi's typesafe-system-one
+ *  transport expects: it appends the `systemone` path segment itself
+ *  (`new URL("systemone", baseUrl + "/")`). Both styles are accepted — the
+ *  dsh-style FULL endpoint (`http://host:11434/v1/systemone`, what dsh calls
+ *  directly) and the bare base (`http://host:11434/v1`). */
+export function normalizeDecisionBaseUrl(raw: string): string {
+	let url = raw.trim().replace(/\/+$/u, "");
+	if (url.endsWith("/systemone")) url = url.slice(0, -"/systemone".length).replace(/\/+$/u, "");
+	return url;
+}
+
 export interface DecisionProviderConfig {
 	name: string;
 	baseUrl: string;
@@ -35,7 +46,7 @@ export interface DecisionProviderConfig {
 export function buildDecisionProviderConfig(entry: DecisionEndpoint): DecisionProviderConfig {
 	return {
 		name: `${entry.provider} (switchman decision)`,
-		baseUrl: entry.baseUrl.trim(),
+		baseUrl: normalizeDecisionBaseUrl(entry.baseUrl),
 		apiKey: entry.apiKey !== undefined && entry.apiKey !== "" ? entry.apiKey : "local",
 		models: [
 			{
