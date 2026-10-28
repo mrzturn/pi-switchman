@@ -22,6 +22,7 @@ import { PROTOCOL_SECTION_KEY, protocolText } from "./protocol.ts";
 import { createExpandTool } from "./expand.ts";
 import { createDispatchTool } from "./dispatch.ts";
 import { registerRouter } from "./router.ts";
+import { registerVisionRelay } from "./vision-relay.ts";
 import { registerDecisionEndpoint } from "./decision-model.ts";
 import { applyWatermark, AUTO_CONTINUE_MESSAGE, type WatermarkTier } from "./watermark.ts";
 import { registerConfigCommand, saveTarget } from "./config-ui.ts";
@@ -159,6 +160,7 @@ export default function (pi: ExtensionAPI) {
 
 	try {
 		registerRouter(pi, { config: cfgNow, enabled: () => cfgNow().router.enabled && !cfgNow().disabled });
+		registerVisionRelay(pi, { config: cfgNow }); // large-context image turns: describe-inject instead of cold-switch
 	} catch (error) {
 		console.error(`[pi-switchman] router registration failed: ${String((error as Error)?.message ?? error)}`);
 	}

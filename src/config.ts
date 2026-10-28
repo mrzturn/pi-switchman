@@ -73,6 +73,12 @@ export interface RouterConfig {
 	decisionModel: ModelRef | null;
 	/** Optional local decision endpoint; registered as a provider at load. */
 	decisionEndpoint: DecisionEndpoint | null;
+	/** Image-relay threshold in context tokens: at or above this, image turns on
+	 *  text-only models stay put and a vision model describes the images into a
+	 *  custom message instead of cold-switching the whole turn. 0 disables relay. */
+	visionRelayThresholdTokens: number;
+	/** Timeout for the vision-relay describe call. */
+	visionRelayTimeoutMs: number;
 }
 
 export interface SwitchmanConfig {
@@ -108,6 +114,8 @@ export const DEFAULT_CONFIG: SwitchmanConfig = {
 		decisionTimeoutMs: 2000,
 		decisionModel: null,
 		decisionEndpoint: null,
+		visionRelayThresholdTokens: 50_000,
+		visionRelayTimeoutMs: 30_000,
 	},
 };
 
@@ -125,6 +133,12 @@ function boolOr(source: Record<string, unknown>, key: string, fallback: boolean)
 function intOr(source: Record<string, unknown>, key: string, fallback: number): number {
 	const value = source[key];
 	if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.floor(value);
+	return fallback;
+}
+
+function nonNegativeIntOr(source: Record<string, unknown>, key: string, fallback: number): number {
+	const value = source[key];
+	if (typeof value === "number" && Number.isFinite(value) && value >= 0) return Math.floor(value);
 	return fallback;
 }
 
@@ -235,6 +249,8 @@ export function mergeConfig(base: SwitchmanConfig, override: Record<string, unkn
 			decisionTimeoutMs: intOr(router, "decisionTimeoutMs", base.router.decisionTimeoutMs),
 			decisionModel: router.decisionModel === null ? null : decision,
 			decisionEndpoint: endpoint,
+			visionRelayThresholdTokens: nonNegativeIntOr(router, "visionRelayThresholdTokens", base.router.visionRelayThresholdTokens),
+			visionRelayTimeoutMs: Math.max(1_000, intOr(router, "visionRelayTimeoutMs", base.router.visionRelayTimeoutMs)),
 		};
 	}
 	return out;
