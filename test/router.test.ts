@@ -206,3 +206,22 @@ test("image gate: fail-open when no image-capable model exists", async () => {
 	assert.equal(outcome.ref.model, "model-heavy");
 	assert.equal(registry.classifyCalls, 1);
 });
+
+test("image gate: flat agent-session toolResult shape (read tool on an image)", async () => {
+	// The shape pi's agent state actually uses after `read` on a png: content
+	// directly on the toolResult message, no results[] wrapper. Regression: the
+	// gate used to miss this shape and sticky continuation stayed on a text model.
+	const flatRequest = request({
+		reason: "continuation",
+		messages: [
+			{ role: "user", content: [{ type: "text", text: "看截图" }], timestamp: Date.now() },
+			{ role: "assistant", content: [{ type: "toolCall", id: "t1", name: "read", arguments: {} }], timestamp: Date.now() },
+			{ role: "toolResult", toolCallId: "t1", toolName: "read", content: [{ type: "text", text: "Read image file" }, { type: "image" as never, source: {} as never }] },
+		] as never,
+	});
+	const registry = fakeRegistry({ models: [...MODELS, IMAGE_MODEL] });
+	const previous = { model: { provider: "p", id: "model-mid" }, thinkingLevel: "medium" as never };
+	const outcome = await routeCore({ config: () => CONFIG, registry }, { ...flatRequest, previous });
+	assert.deepEqual(outcome.ref, { provider: "p2", model: "model-vision" });
+	assert.equal(outcome.state?.lane, "vision");
+});

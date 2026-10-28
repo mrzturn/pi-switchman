@@ -137,6 +137,73 @@ test("watermark: force tier compacts once and fires the auto-continue", async ()
 	assert.equal(continued, 1);
 });
 
+function watermarkHarness(branch: unknown[], usage = { percent: 0.5 }) {
+	const handlers = new Map<string, ((event: unknown, ctx: unknown) => Promise<void>)[]>();
+	const pi = {
+		on: (event: string, handler: (event: unknown, ctx: unknown) => Promise<void>) => {
+			const list = handlers.get(event) ?? [];
+			list.push(handler);
+			handlers.set(event, list);
+			return () => {};
+		},
+	} as never;
+	let continued = 0;
+	applyWatermark(pi, {
+		config: () => ({
+			watermark: DEFAULT_CONFIG.watermark,
+			compress: { hardRatio: DEFAULT_CONFIG.compress.hardRatio },
+			disabled: false,
+		}),
+		setThresholdScale: () => {},
+		onTier: () => {},
+		afterCompact: () => {
+			continued++;
+		},
+	});
+	const ctx = {
+		hasUI: false,
+		getContextUsage: () => usage,
+		sessionManager: { getBranch: () => branch },
+	} as never;
+	return { handlers, ctx, count: () => continued };
+}
+
+test("watermark: dead-turn continuation after pi's post-error threshold compaction", async () => {
+	// Branch tail = errored assistant + compaction with nothing after: pi's Case 3
+	// (post-error threshold compaction) compacts but never retries, so the run died.
+	const { handlers, ctx, count } = watermarkHarness([
+		{ type: "message", message: { role: "assistant", stopReason: "error", errorMessage: "This operation was aborted" } },
+		{ type: "compaction", summary: "..." },
+	]);
+	const turnEnd = handlers.get("turn_end") ?? [];
+	await turnEnd[0]({}, ctx);
+	assert.equal(count(), 1);
+	// cooldown blocks an immediate repeat
+	await turnEnd[0]({}, ctx);
+	assert.equal(count(), 1);
+});
+
+test("watermark: no continuation for finished turns or non-trailing compaction", async () => {
+	// finished turn before a manual /compact: stopReason stop
+	const done = watermarkHarness([
+		{ type: "message", message: { role: "assistant", stopReason: "stop" } },
+		{ type: "compaction", summary: "..." },
+	]);
+	await (done.handlers.get("turn_end") ?? [])[0]({}, done.ctx);
+	assert.equal(done.count(), 0);
+	// compaction followed by a live turn (our force-tier continuation already ran)
+	const live = watermarkHarness([
+		{ type: "compaction", summary: "..." },
+		{ type: "message", message: { role: "user", content: [] } },
+	]);
+	await (live.handlers.get("turn_end") ?? [])[0]({}, live.ctx);
+	assert.equal(live.count(), 0);
+	// plain branch, no compaction at all
+	const plain = watermarkHarness([{ type: "message", message: { role: "assistant", stopReason: "error" } }]);
+	await (plain.handlers.get("turn_end") ?? [])[0]({}, plain.ctx);
+	assert.equal(plain.count(), 0);
+});
+
 test("AUTO_CONTINUE_MESSAGE: byte-stable continuation contract", () => {
 	assert.ok(AUTO_CONTINUE_MESSAGE.startsWith("[SWITCHMAN:CONTINUE]"));
 	assert.ok(AUTO_CONTINUE_MESSAGE.includes("dispatch ledger"));

@@ -20,6 +20,7 @@ export function tierOf(percent: number, config: WatermarkConfig): WatermarkTier 
 }
 
 const COMPACT_COOLDOWN_MS = 10 * 60 * 1000;
+const CONTINUE_COOLDOWN_MS = 60 * 1000;
 
 /** Byte-stable continuation message sent as the user after a force-tier
  *  compaction, so the agent resumes the interrupted task without waiting
@@ -39,6 +40,7 @@ export interface WatermarkDeps {
 export function applyWatermark(pi: ExtensionAPI, deps: WatermarkDeps): void {
 	let lastTier: WatermarkTier = "ok";
 	let lastCompactAt = 0;
+	let lastContinueAt = 0;
 
 	pi.on("session_start", () => {
 		lastTier = "ok";
@@ -48,6 +50,35 @@ export function applyWatermark(pi: ExtensionAPI, deps: WatermarkDeps): void {
 		try {
 			const config = deps.config();
 			if (config.disabled) return;
+
+			// Dead-turn continuation. When a provider error kills a response, pi's
+			// post-error threshold compaction compacts but never retries (its Case 3
+			// has no willRetry), so the run dies after showing the error. Structural
+			// check: the branch tail is an errored assistant message immediately
+			// followed by the compaction, with nothing after it. Manual /compact on
+			// a finished turn does not match (stopReason "stop"); our own force-tier
+			// compaction does not match either (its onComplete already continues).
+			const tail = (() => {
+				try {
+					const branch = (ctx.sessionManager.getBranch() as unknown[]) ?? [];
+					return branch.slice(-2) as { type?: string; message?: { role?: string; stopReason?: string } }[];
+				} catch {
+					return [];
+				}
+			})();
+			const [prevEntry, lastEntry] = tail;
+			if (
+				lastEntry?.type === "compaction" &&
+				prevEntry?.type === "message" &&
+				prevEntry.message?.role === "assistant" &&
+				prevEntry.message?.stopReason === "error" &&
+				Date.now() - lastContinueAt > CONTINUE_COOLDOWN_MS
+			) {
+				lastContinueAt = Date.now();
+				deps.afterCompact?.(ctx);
+				return; // the turn is dead; tier logic below would misfire on stale usage
+			}
+
 			const usage = ctx.getContextUsage();
 			if (usage === undefined || usage.percent === null) return;
 			const tier = tierOf(usage.percent, config.watermark);

@@ -98,7 +98,10 @@ function lastUserHasImages(messages: readonly Message[]): boolean {
 
 /** True when the request's newest message carries image content: a user
  *  attachment or an image-bearing tool result (e.g. the read tool on a png).
- *  Drives the image capability gate — a text-only model silently drops images. */
+ *  Handles both toolResult shapes pi/pi-ai use: the agent-session flat form
+ *  (`content` on the message, what route() sees after a read of an image) and
+ *  the multi-result form (`results[]`). Drives the image capability gate —
+ *  a text-only model silently drops images. */
 function lastMessageHasImages(messages: readonly Message[]): boolean {
 	const last = messages[messages.length - 1];
 	if (last === undefined) return false;
@@ -106,6 +109,8 @@ function lastMessageHasImages(messages: readonly Message[]): boolean {
 		return Array.isArray(last.content) && last.content.some((part) => part.type === "image");
 	}
 	if (last.role === "toolResult") {
+		const flat = (last as { content?: unknown }).content;
+		if (Array.isArray(flat) && flat.some((part) => (part as { type?: string }).type === "image")) return true;
 		const results = (last as { results?: { content?: unknown }[] }).results ?? [];
 		return results.some(
 			(result) => Array.isArray(result.content) && result.content.some((part) => (part as { type?: string }).type === "image"),

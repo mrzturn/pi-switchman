@@ -181,10 +181,12 @@ export default function (pi: ExtensionAPI) {
 			watermarkTier = tier;
 		},
 		afterCompact: (ctx) => {
-			// Auto-continue: queue a user turn right after the force-tier
-			// compaction so the agent resumes without waiting for the human.
+			// Auto-continue: queue a user turn right after a compaction that killed
+			// the run (force-tier onComplete, or pi's post-error threshold compaction
+			// detected at turn_end) so the agent resumes without waiting for the human.
+			// deliverAs followUp: if the agent is somehow still busy, queue instead of throw.
 			try {
-				ctx.sendUserMessage(AUTO_CONTINUE_MESSAGE);
+				ctx.sendUserMessage(AUTO_CONTINUE_MESSAGE, { deliverAs: "followUp" } as never);
 			} catch {
 				/* fail-open */
 			}

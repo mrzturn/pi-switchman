@@ -72,6 +72,13 @@ async function runHandler(ctx: never, images: { type: "image" }[], config = DEFA
 	return await handlers[0](event as never, ctx);
 }
 
+async function runToolResultHandler(ctx: never, event: Record<string, unknown>, config = DEFAULT_CONFIG) {
+	const byEvent = new Map<string, ((event: unknown, ctx: never) => Promise<unknown>)[]>();
+	const pi = { on: (name: string, handler: (event: unknown, ctx: never) => Promise<unknown>) => { const list = byEvent.get(name) ?? []; list.push(handler); byEvent.set(name, list); return () => {}; } } as never;
+	registerVisionRelay(pi, { config: () => config });
+	return await (byEvent.get("tool_result") ?? [])[0](event as never, ctx);
+}
+
 test("relay: large context + text model describes, splices images, injects message", async () => {
 	const { ctx, calls } = fakeCtx();
 	const images = [{ type: "image" as const }];
@@ -119,4 +126,49 @@ test("describeImages: returns null on provider failure", async () => {
 	assert.match(ok ?? "", /screenshot/);
 	const missing = await describeImages(ctx as never, { provider: "p2", model: "nope" }, [], "ctx", 5_000);
 	assert.equal(missing, null);
+});
+
+test("tool-result relay: large context replaces image parts with a description (flat shape)", async () => {
+	const { ctx, calls } = fakeCtx();
+	const event = {
+		toolName: "read",
+		toolCallId: "t1",
+		input: { path: "/tmp/pi-clipboard-xyz.png" },
+		content: [
+			{ type: "text", text: "Read image file [image/png]" },
+			{ type: "image", source: { type: "base64" } },
+		],
+		isError: false,
+	};
+	const result = (await runToolResultHandler(ctx, event)) as { content: { type: string; text?: string }[] } | undefined;
+	assert.equal(calls.complete.length, 1);
+	const request = calls.complete[0].request as { messages: { content: unknown[] }[] };
+	assert.equal(request.messages[0].content.filter((part) => (part as { type: string }).type === "image").length, 1);
+	assert.equal(result?.content.some((part) => part.type === "image"), false); // image gone: sticky model never sees it
+	const note = result?.content.find((part) => part.type === "text" && part.text?.includes("VISION-RELAY"));
+	assert.match(note?.text ?? "", /terminal screenshot/);
+	assert.match(note?.text ?? "", /pi-clipboard-xyz\.png/);
+});
+
+test("tool-result relay: below threshold the image stays for the gate", async () => {
+	const { ctx, calls } = fakeCtx({ tokens: 10_000 });
+	const event = { toolName: "read", input: { path: "/tmp/x.png" }, content: [{ type: "text", text: "hi" }, { type: "image" }], isError: false };
+	assert.equal(await runToolResultHandler(ctx, event), undefined);
+	assert.equal(calls.complete.length, 0);
+});
+
+test("tool-result relay: describe failure keeps the image (gate switches the turn)", async () => {
+	const { ctx } = fakeCtx({ describe: null });
+	const event = { toolName: "read", input: { path: "/tmp/x.png" }, content: [{ type: "image" }], isError: false };
+	assert.equal(await runToolResultHandler(ctx, event), undefined);
+});
+
+test("tool-result relay: non-read tools and capable models untouched", async () => {
+	const { ctx, calls } = fakeCtx();
+	const bash = { toolName: "bash", input: { command: "cat" }, content: [{ type: "image" }], isError: false };
+	assert.equal(await runToolResultHandler(ctx, bash), undefined);
+	const capable = fakeCtx({ textPhysical: false });
+	const read = { toolName: "read", input: { path: "/tmp/x.png" }, content: [{ type: "image" }], isError: false };
+	assert.equal(await runToolResultHandler(capable.ctx, read), undefined);
+	assert.equal(calls.complete.length, 0);
 });

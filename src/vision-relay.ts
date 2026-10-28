@@ -140,6 +140,9 @@ export async function describeImages(
 }
 
 export function registerVisionRelay(pi: ExtensionAPI, deps: { config: () => SwitchmanConfig }): void {
+	// [a] User-attachment relay: pi's TUI paste inserts only the file path, so
+	// event.images fires for API/SDK submissions (sendUserMessage with images).
+	// Kept for that path; TUI pastes flow through the read tool instead ([b]).
 	pi.on("before_agent_start", async (event, ctx) => {
 		try {
 			if (event.messageType !== "user") return;
@@ -192,6 +195,59 @@ export function registerVisionRelay(pi: ExtensionAPI, deps: { config: () => Swit
 			};
 		} catch {
 			return; // fail-open: untouched images let the gate switch the turn
+		}
+	});
+
+	// [b] Tool-result relay: the read tool returns images even for text-only
+	// routed models (pi-ai downgrades them to placeholders per request), so the
+	// TUI paste-a-screenshot flow lands here. At or above the relay threshold,
+	// describe the images and replace the image parts in the tool result: the
+	// sticky text model keeps its cache and reads the description instead of
+	// cold-switching the whole turn. Below the threshold, leave the image in —
+	// the router's image gate (fixed to see the flat toolResult shape) switches
+	// the turn to a vision model, which is cheap on a small context.
+	pi.on("tool_result", async (event, ctx) => {
+		try {
+			if (event.toolName !== "read") return;
+			const parts = (event.content ?? []) as { type?: string }[];
+			const images = parts.filter((part) => part.type === "image") as unknown as ImageContent[];
+			if (images.length === 0) return; // plain text read, or the model reads images natively
+			const config = deps.config();
+			if (!config.router.enabled || config.disabled) return;
+			const threshold = config.router.visionRelayThresholdTokens;
+			if (threshold <= 0) return; // relay off: the gate switches the turn
+
+			const physical = lastPhysicalRef(ctx);
+			const usage = ctx.getContextUsage();
+			const decision = relayDecision({
+				hasImages: true,
+				thresholdTokens: threshold,
+				contextTokens: usage?.tokens ?? null,
+				physicalImageCapable: physical === null ? null : modelIsImageCapable(ctx, physical),
+			});
+			if (decision !== "relay") return; // small context or image-capable model: gate handles it
+
+			const ref = describeModelRef(ctx, config);
+			if (ref === null) return; // no describer: gate switches the turn
+			const relevance = String((event.input as { path?: unknown } | undefined)?.path ?? "");
+			const description = await describeImages(ctx, ref, images, relevance, config.router.visionRelayTimeoutMs);
+			if (description === null) return; // describe failed: gate switches the turn
+
+			let injected = false;
+			const content = parts
+				.map((part) => {
+					if (part.type !== "image") return part;
+					if (injected) return null; // one combined note for all images
+					injected = true;
+					return {
+						type: "text" as const,
+					text: `[SWITCHMAN:VISION-RELAY] The read tool returned ${images.length} image(s) (${relevance}); the active model cannot read images, so ${ref.provider}/${ref.model} described them. Description:\n\n${description}\n\nWork from this description as if you had seen the image(s).`,
+					};
+				})
+				.filter((part) => part !== null);
+			return { ...event, content } as never; // chained transformation: replaces the result
+		} catch {
+			return; // fail-open: the untouched image lets the gate switch the turn
 		}
 	});
 }
