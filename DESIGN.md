@@ -333,6 +333,8 @@ pi-switchman/
 
 ## 8. 分期实施
 
+> **状态**：M0–M4 全部完成并验收；M5 未排期。各层源码见 src/，测试 48/48。
+
 | 里程碑 | 内容 | 独立可验证 |
 |---|---|---|
 | **M0** | 骨架 + 缓存宪法落地：sections 字节稳定注入、tool_result 透传（先不压）、`/switchman:status` 命令 | 开 `showCacheMissNotices` 观察无额外 miss |

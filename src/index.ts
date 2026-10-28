@@ -1,26 +1,33 @@
 /** pi-switchman — context economics engine for pi.
  *
- *  M0+M1 wiring (DESIGN.md §8):
- *  - [M0] byte-stable protocol section (before_agent_start.sections)
- *  - [M0] /switchman-status command
- *  - [M1] entry compression pipeline (tool_result, distill-before-transcript)
- *  - [M1] expand tool (spans of stored full outputs)
+ *  Full wiring (DESIGN.md §8, M0–M4):
+ *  - [A] entry compression pipeline + expand tool
+ *  - [B] dispatch tool (gather/judge/run/parallel) + ledger
+ *  - [C] switchman/auto virtual model (dual-decoder sticky routing)
+ *  - [D] capability knowledge layer (anchors + inference + builtin baseline)
+ *  - [E] watermark dashboard + fuses + ledger-aware compaction
+ *  - [F] /switchman-config TUI editor
  *
- *  Cache constitution: the protocol section text is a pure function of config
- *  flags; all hook paths fail open; tool declarations never change mid-session. */
+ *  Cache constitution: the protocol section is a pure function of config
+ *  flags; all hook paths fail open; tool declarations never change
+ *  mid-session; model switches happen only at user boundaries. */
 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { ConfigStore, type LoadedConfig } from "./config.ts";
+import { ConfigStore, writeRawConfig, type LoadedConfig, type SwitchmanConfig } from "./config.ts";
 import { OutputStore, distillText, storeFooter, textOf, type ContentBlock } from "./compress.ts";
 import { PROTOCOL_SECTION_KEY, protocolText } from "./protocol.ts";
 import { createExpandTool } from "./expand.ts";
+import { createDispatchTool } from "./dispatch.ts";
+import { registerRouter } from "./router.ts";
+import { applyWatermark, type WatermarkTier } from "./watermark.ts";
+import { registerConfigCommand, saveTarget } from "./config-ui.ts";
 import { registerStatusCommand, Stats } from "./status.ts";
 
-/** Watermark coupling point for M4: multiplies the compression threshold
- *  (1 = full threshold; < 1 tightens under pressure, e.g. hardRatio). */
+/** Watermark coupling point: multiplies the compression threshold
+ *  (1 = full threshold; < 1 tightens under pressure). */
 let thresholdScale = 1;
 export function setCompressionThresholdScale(scale: number): void {
 	thresholdScale = scale > 0 && scale <= 1 ? scale : 1;
@@ -34,41 +41,56 @@ export default function (pi: ExtensionAPI) {
 	const stats = new Stats();
 	const store = new OutputStore(tmpdir());
 	let protocolSeen = false;
+	let watermarkTier: WatermarkTier = "ok";
 
 	let configStore: ConfigStore | null = null;
 	let configCwd: string | null = null;
+	function configPaths(cwd: string): { globalPath: string; projectPath: string } {
+		return {
+			globalPath: join(getAgentDir(), "switchman.json"),
+			projectPath: join(cwd, ".pi", "switchman.json"),
+		};
+	}
 	function configFor(cwd: string): LoadedConfig {
+		const paths = configPaths(cwd);
 		if (configStore === null || configCwd !== cwd) {
-			configStore = new ConfigStore(join(getAgentDir(), "switchman.json"), join(cwd, ".pi", "switchman.json"));
+			configStore = new ConfigStore(paths.globalPath, paths.projectPath);
 			configCwd = cwd;
 		}
 		return configStore.load();
 	}
+	const cfgNow = (): SwitchmanConfig => configFor(configCwd ?? process.cwd()).config;
+
+	// ---- lifecycle -----------------------------------------------------------
 
 	pi.on("session_start", () => {
 		stats.reset();
+		watermarkTier = "ok";
 	});
 
-	// [M0] Byte-stable protocol section. Mutating sections here records at most
-	// one prompt change per distinct config — stable within a session.
+	// ---- [M0] byte-stable protocol section ------------------------------------
+
 	pi.on("before_agent_start", (event) => {
 		try {
 			const cfg = configFor(event.systemPromptOptions.cwd).config;
 			if (cfg.disabled) return;
-			event.systemPromptOptions.sections[PROTOCOL_SECTION_KEY] = protocolText(cfg.compress.enabled);
+			event.systemPromptOptions.sections[PROTOCOL_SECTION_KEY] = protocolText({
+				compressEnabled: cfg.compress.enabled,
+				dispatchEnabled: !cfg.disabled,
+			});
 			protocolSeen = true;
 		} catch {
 			/* fail-open: no section */
 		}
 	});
 
-	// [M1] Entry compression: distill oversized text results before they enter
-	// the transcript; the full output goes to the store, the footer names it.
+	// ---- [M1] entry compression ----------------------------------------------
+
 	pi.on("tool_result", (event, ctx) => {
 		try {
 			if (event.isError) return; // diagnostics pass through untouched
 			if (event.parentToolCallId !== undefined) return; // nested: never enters the transcript
-			if (event.toolName === "expand") return; // our own results stay small
+			if (event.toolName === "expand" || event.toolName === "dispatch") return;
 			const cfg = configFor(ctx.cwd).config;
 			if (cfg.disabled || !cfg.compress.enabled) return;
 			const text = textOf(event.content as ContentBlock[]);
@@ -110,11 +132,59 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
+	// ---- [M2] dispatch + expand tools -----------------------------------------
+
 	pi.registerTool(createExpandTool(store));
+	pi.registerTool(
+		createDispatchTool({
+			config: () => configFor(configCwd ?? process.cwd()),
+			store,
+			pi,
+		}),
+	);
+
+	// ---- [M3a/M3b] router + decision model ------------------------------------
+
+	try {
+		registerRouter(pi, { config: cfgNow, enabled: () => cfgNow().router.enabled && !cfgNow().disabled });
+	} catch (error) {
+		console.error(`[pi-switchman] router registration failed: ${String((error as Error)?.message ?? error)}`);
+	}
+
+	// ---- [M4] watermark --------------------------------------------------------
+
+	applyWatermark(pi, {
+		config: () => {
+			const config = cfgNow();
+			return {
+				watermark: config.watermark,
+				compress: { hardRatio: config.compress.hardRatio },
+				disabled: config.disabled,
+			};
+		},
+		setThresholdScale: setCompressionThresholdScale,
+		onTier: (tier) => {
+			watermarkTier = tier;
+		},
+	});
+
+	// ---- [F] config TUI + status ----------------------------------------------
+
+	registerConfigCommand(pi, {
+		config: () => configFor(configCwd ?? process.cwd()),
+		save: (patch) => {
+			const paths = configPaths(configCwd ?? process.cwd());
+			const target = saveTarget(paths.globalPath, paths.projectPath);
+			writeRawConfig(target, patch);
+			return target;
+		},
+	});
+
 	registerStatusCommand(pi, {
 		stats,
 		store,
 		config: () => configFor(configCwd ?? process.cwd()),
 		protocolInjected: () => protocolSeen,
+		watermarkTier: () => watermarkTier,
 	});
 }

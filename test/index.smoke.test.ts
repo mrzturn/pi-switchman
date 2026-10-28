@@ -52,10 +52,11 @@ test("M0+M1 wiring smoke: section, compression, expand, status", async () => {
 		const { pi, recorded } = fakePi();
 		factory(pi as never);
 
-		// M0: /switchman-status registered; expand tool registered
+		// M0: /switchman-status + /switchman-config registered; expand + dispatch tools
 		assert.ok(recorded.commands.has("switchman-status"));
-		assert.equal(recorded.tools.length, 1);
-		const expand = recorded.tools[0] as { name: string; execute: (id: string, params: Record<string, unknown>) => Promise<unknown> };
+		assert.ok(recorded.commands.has("switchman-config"));
+		assert.equal(recorded.tools.length, 2);
+		const expand = recorded.tools.find((tool: { name: string }) => tool.name === "expand") as { name: string; execute: (id: string, params: Record<string, unknown>) => Promise<unknown> };
 		assert.equal(expand.name, "expand");
 
 		// M0: protocol section byte-stable across two runs
