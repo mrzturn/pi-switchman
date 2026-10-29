@@ -6,6 +6,7 @@ import type { LoadedConfig } from "./config.ts";
 import type { OutputStore } from "./compress.ts";
 import { ledgerFromBranch } from "./ledger.ts";
 import { routerStats } from "./router.ts";
+import { tailAgentLog, TmuxWatch } from "./watch.ts";
 import type { WatermarkTier } from "./watermark.ts";
 
 /** In-memory, reset on session_start. Never persisted — purely informational. */
@@ -131,6 +132,47 @@ export function registerStatusCommand(pi: ExtensionAPI, deps: StatusDeps): void 
 			}
 			lines.push(`store: ${deps.store.dir} (${files} files)`);
 			ctx.ui.notify(lines.join("\n"), "info");
+		},
+	});
+
+	// ---- agent work visibility ----------------------------------------------
+
+	const watch = new TmuxWatch();
+	pi.registerCommand("switchman-agents", {
+		description: "List subagent work logs, or tail one: /switchman-agents [n]",
+		handler: async (args, ctx) => {
+			let records: ReturnType<typeof ledgerFromBranch> = [];
+			try {
+				records = ledgerFromBranch(ctx.sessionManager.getBranch()).filter((r) => (r.logPaths?.length ?? 0) > 0);
+			} catch {
+				/* fail-open */
+			}
+			if (records.length === 0) {
+				ctx.ui.notify("no subagent dispatches yet (run/parallel create work logs)", "info");
+				return;
+			}
+			const listed = records.slice(-10);
+			const arg = args.trim();
+			if (arg === "") {
+				const lines = [`subagent work logs (tmux: ${watch.active ? "on — live panes open automatically" : "off — tail with /switchman-agents <n>"}):`];
+				listed.forEach((record, index) => {
+					const time = new Date(record.ts).toLocaleTimeString();
+					lines.push(`  ${index + 1}. ${time} ${record.mode} "${record.description}" ${record.status} (${record.logPaths?.length} log${record.logPaths && record.logPaths.length > 1 ? "s" : ""})`);
+				});
+				ctx.ui.notify(lines.join("\n"), "info");
+				return;
+			}
+			const index = Number.parseInt(arg, 10);
+			if (!Number.isInteger(index) || index < 1 || index > listed.length) {
+				ctx.ui.notify(`/switchman-agents: index out of range (1-${listed.length})`, "warning");
+				return;
+			}
+			const record = listed[index - 1];
+			const parts = [`[switchman] ${record.mode} "${record.description}" — ${record.logPaths?.length} log(s):`];
+			for (const path of record.logPaths ?? []) {
+				parts.push(`--- ${path} ---`, tailAgentLog(path));
+			}
+			ctx.ui.notify(parts.join("\n"), "info");
 		},
 	});
 }

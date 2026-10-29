@@ -11,10 +11,10 @@
 | 层 | 能力 |
 |---|---|
 | **[A] 入口压缩** | 超大工具结果进 transcript 前蒸馏（保头尾+省略标记），全文落盘 footer 留路径；`expand` 工具按行号取任意片段；hard 水位自动收紧阈值 |
-| **[B] 执行矩阵** | `dispatch` 工具四模式：`gather`（内嵌只读步骤编排，过程零入栈）/ `judge`（泳道模型单发裁决）/ `run`（隔离子进程 subagent）/ `parallel`（≤8 任务并行）；每次派发入台账（防重复派发 + 压缩保真） |
+| **[B] 执行矩阵** | `dispatch` 工具四模式：`gather`（内嵌只读步骤编排，过程零入栈）/ `judge`（泳道模型单发裁决）/ `run`（隔离子进程 subagent）/ `parallel`（≤8 任务并行）；每次派发入台账（防重复派发 + 压缩保真）；**子智能体工作可视**：每个 run agent 写人类可读日志，tmux 内自动开 `switchman-agents` 窗口分屏 tail 直播，非 tmux 用 `/switchman-agents [n]` 列表/钻取 |
 | **[C] sticky 路由** | `switchman/auto` 虚拟模型：continuation/retry 粘滞保缓存；user 边界双决策器（本地决策模型 + 内置规则打底）判泳道；缓存窗口 + 置信度双闸决定换/留；**图像闸门**：请求带图（read 工具的图像结果或 API 附件）而当前模型不读图时，优先于一切粘滞强制改道 vision 泳道；**图像中继**：大上下文（≥ `router.visionRelayThresholdTokens`，默认 50k，0 关闭）时不冷切，由 vision 泳道小请求描述图片注入对话（用户附件在 before_agent_start 拦截，read 工具结果在 tool_result 拦截替换），当前模型缓存无损，失败自动回落整回合切换；**死回合接续**：pi 在响应出错后的阈值压缩只压不接（Case 3 无 retry），turn_end 检测到「errored assistant + 尾部压缩」死回合时自动发 [SWITCHMAN:CONTINUE] 接续 |
 | **[D] 能力知识层** | 候选集活目录现查；锚点 > 名字/价格启发式推断 > 目录顺序；泳道未配置自动排序 |
-| **[E] 水位** | soft→引导派发 / hard→压缩收紧 / force→台账感知的定制 compaction 并自动接续（不等用户说话，10 分钟冷却） |
+| **[E] 水位** | soft→引导派发 / hard→压缩收紧 / force→提示 pi 自动压缩（单压缩者原则；台账经 session_before_compact 快照、session_compact 后确定性还原）；死回合（stopReason=error）自动接续 |
 | **[F] TUI 配置** | `/switchman-config`：泳道×有序模型表（↑↓调序）、决策模型选择、即存即生效；JSON 文件永远可手改 |
 
 出厂 agents：`scout`（侦查）/ `reviewer`（独立复审）/ `tester`（测试分诊）/ `worker`（通用实现）。

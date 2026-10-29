@@ -21,6 +21,8 @@ export interface LedgerRecord {
 	ts: number;
 	/** Store path holding the full output (expand-readable) when applicable. */
 	reportPath?: string;
+	/** Per-agent work logs (watch.ts) for run/parallel dispatches. */
+	logPaths?: string[];
 	lane?: string;
 	model?: string;
 }
@@ -42,6 +44,9 @@ export function ledgerFromBranch(branch: readonly SessionEntry[]): LedgerRecord[
 			status: record.status === "error" ? "error" : "done",
 			ts: record.ts,
 			reportPath: typeof record.reportPath === "string" ? record.reportPath : undefined,
+			logPaths: Array.isArray(record.logPaths)
+				? record.logPaths.filter((p): p is string => typeof p === "string")
+				: undefined,
 			lane: typeof record.lane === "string" ? record.lane : undefined,
 			model: typeof record.model === "string" ? record.model : undefined,
 		});

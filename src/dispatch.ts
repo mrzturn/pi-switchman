@@ -19,6 +19,7 @@ import type { LaneName, LoadedConfig, ModelRef, SwitchmanConfig } from "./config
 import { LANE_NAMES } from "./config.ts";
 import { laneCandidates } from "./capability.ts";
 import { currentPhysicalModel, LEDGER_TYPE } from "./ledger.ts";
+import { formatChildMessage, startAgentLog, TmuxWatch } from "./watch.ts";
 import { finalOutput, runPiChild } from "./child.ts";
 import { findAgent, type AgentScope } from "./agents.ts";
 import type { OutputStore } from "./compress.ts";
@@ -203,7 +204,8 @@ async function runAgent(
 	params: { agent: string; task: string; model?: string; thinking?: string; cwd?: string },
 	signal: AbortSignal,
 	onLine?: (line: string) => void,
-): Promise<{ ok: boolean; text: string; reportPath?: string; model?: string; usage?: unknown }> {
+	watch?: TmuxWatch,
+): Promise<{ ok: boolean; text: string; reportPath?: string; model?: string; usage?: unknown; logPath?: string }> {
 	const scope: AgentScope = "user";
 	const agent = findAgent(params.cwd ?? ctx.cwd, scope, params.agent);
 	if (agent === undefined) {
@@ -233,6 +235,10 @@ async function runAgent(
 	if (params.thinking !== undefined && params.thinking !== "") args.push("--thinking", params.thinking);
 	if (agent.tools !== undefined && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 
+	// Work visibility: human-readable log + live tmux pane when available.
+	const log = startAgentLog(deps.store.dir, `run-${agent.name}`, params.task);
+	const paneId = log && watch?.active ? watch.attach(log.path) : null;
+
 	const result = await runPiChild({
 		args,
 		cwd: params.cwd ?? ctx.cwd,
@@ -240,6 +246,11 @@ async function runAgent(
 		task: params.task,
 		signal,
 		onMessage: (message) => {
+			try {
+				log?.write(formatChildMessage(message) ?? "");
+			} catch {
+				/* log is advisory */
+			}
 			if (message.role === "assistant" && onLine) onLine(snippet(textBlocks((message as { content?: unknown }).content), 160));
 		},
 	});
@@ -249,6 +260,12 @@ async function runAgent(
 		? result.errorMessage || result.stderr || finalOutput(result.messages) || "(no output)"
 		: finalOutput(result.messages) || "(no output)";
 	const full = `${warning}[switchman] agent=${agent.name} model=${result.model ?? modelLabel ?? "?"} exit=${result.exitCode}\n\n${output}`;
+	try {
+		log?.write(`■ exit=${result.exitCode} stop=${result.stopReason ?? "?"}${failed ? ` error=${result.errorMessage ?? ""}` : ""}`);
+	} catch {
+		/* log is advisory */
+	}
+	watch?.detach(paneId);
 	const reportPath = deps.store.add(`run-${agent.name}`, full);
 	return {
 		ok: !failed,
@@ -256,6 +273,7 @@ async function runAgent(
 		reportPath,
 		model: modelLabel,
 		usage: result.usage,
+		logPath: log?.path,
 	};
 }
 
@@ -348,9 +366,12 @@ export function createDispatchTool(deps: DispatchDeps) {
 				}
 
 				// ---- single-task runner (shared by run + parallel) ----
+				// Live watch: inside tmux each run agent gets a tiled pane tailing
+				// its log; outside, /switchman-agents reads the same files.
+				const watch = new TmuxWatch();
 				const runOne = async (
 					task: { mode: string; steps?: Array<{ tool: string; args?: Record<string, unknown> }>; task?: string; lane?: string; model?: string; system?: string; agent?: string; thinking?: string; cwd?: string },
-				): Promise<{ ok: boolean; text: string; reportPath?: string; model?: string }> => {
+				): Promise<{ ok: boolean; text: string; reportPath?: string; model?: string; logPath?: string }> => {
 					if (task.mode === "gather") {
 						if (!Array.isArray(task.steps) || task.steps.length === 0) {
 							return { ok: false, text: "gather requires steps" };
@@ -368,14 +389,14 @@ export function createDispatchTool(deps: DispatchDeps) {
 					}
 					if (task.mode === "run") {
 						if (!task.agent || !task.task) return { ok: false, text: "run requires agent + task" };
-						return await runAgent(ctx, config, deps, { agent: task.agent, task: task.task, model: task.model, thinking: task.thinking, cwd: task.cwd }, signal);
+						return await runAgent(ctx, config, deps, { agent: task.agent, task: task.task, model: task.model, thinking: task.thinking, cwd: task.cwd }, signal, undefined, watch);
 					}
 					return { ok: false, text: `unknown mode "${task.mode}"` };
 				};
 
 				let text: string;
 				let isError = false;
-				let extra: { reportPath?: string; lane?: string; model?: string } = {};
+				let extra: { reportPath?: string; lane?: string; model?: string; logPaths?: string[] } = {};
 
 				if (params.mode === "parallel") {
 					const tasks = params.tasks ?? [];
@@ -393,18 +414,25 @@ export function createDispatchTool(deps: DispatchDeps) {
 						return outcome;
 					});
 					isError = outcomes.some((outcome) => !outcome.ok);
+					const logPaths = outcomes.map((o) => o.logPath).filter((p): p is string => typeof p === "string");
 					text = outcomes
 						.map((outcome, index) => {
 							const label = tasks[index].description ?? tasks[index].mode;
 							const body = outcome.text.length > PARALLEL_TASK_CAP ? `${outcome.text.slice(0, PARALLEL_TASK_CAP)}…` : outcome.text;
 							return `== ${label} ${outcome.ok ? "✓" : "✗"} ==\n${body}`;
 						})
-						.join("\n\n");
+							.join("\n\n");
+					extra = { logPaths };
 				} else {
 					const outcome = await runOne(params);
 					isError = !outcome.ok;
 					text = outcome.text;
-					extra = { reportPath: outcome.reportPath, model: outcome.model, lane: params.lane };
+					extra = {
+						reportPath: outcome.reportPath,
+						model: outcome.model,
+						lane: params.lane,
+						logPaths: outcome.logPath ? [outcome.logPath] : undefined,
+					};
 				}
 
 				finish(isError ? "error" : "done", extra);
