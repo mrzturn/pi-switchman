@@ -11,31 +11,54 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Message } from "@earendil-works/pi-agent-core";
 
-const SNIPPET = 200;
+const SNIPPET_TEXT = 400;
+const SNIPPET_TOOL = 200;
+
+/** ANSI palette for pane rendering (tmux panes render escape codes fine). */
+const DIM = "\x1b[2m";
+const GREEN = "\x1b[32m";
+const CYAN = "\x1b[36m";
+const RED = "\x1b[31m";
+const RESET = "\x1b[0m";
+
+const oneLine = (text: string, max: number) => text.replace(/\s+/g, " ").trim().slice(0, max);
 const DETACH_LINGER_MS = 4000;
 
-/** One human-readable line for a child stream message (pure). */
+/** Conversation-style rendering of a child stream message: the pane should
+ *  read like the main window — the agent's thinking, its replies, the tools
+ *  it calls and what came back. Colored with ANSI (tail -f preserves them).
+ *  Returns null for messages with nothing worth showing. Pure. */
 export function formatChildMessage(message: Message): string | null {
 	const content = (message as { content?: unknown }).content;
 	if (message.role === "assistant" && Array.isArray(content)) {
+		const parts: string[] = [];
+		for (const part of content) {
+			if (part.type === "thinking") {
+				const text = oneLine((part as { thinking?: string }).thinking ?? "", SNIPPET_TEXT);
+				if (text !== "") parts.push(`${DIM}💭 ${text}${RESET}`);
+			}
+		}
 		for (const part of content) {
 			if (part.type === "text") {
-				const text = (part as { text?: string }).text ?? "";
-				if (text.trim() !== "") return `▶ ${text.slice(0, SNIPPET).replace(/\n+/g, " ")}`;
+				const text = oneLine((part as { text?: string }).text ?? "", SNIPPET_TEXT);
+				if (text !== "") parts.push(`${GREEN}▶ ${text}${RESET}`);
 			}
 		}
 		for (const part of content) {
 			if (part.type === "toolCall") {
 				const call = part as { name?: string; arguments?: unknown };
-				return `⚙ ${call.name ?? "tool"}(${JSON.stringify(call.arguments ?? {})?.slice(0, SNIPPET)})`;
+				parts.push(`${CYAN}⚙ ${call.name ?? "tool"} ${oneLine(JSON.stringify(call.arguments ?? ""), SNIPPET_TOOL)}${RESET}`);
 			}
 		}
+		if (parts.length === 0) return null;
+		return `\n${parts.join("\n")}`; // blank line: one assistant turn per block
 	}
 	if (message.role === "toolResult" && Array.isArray(content)) {
 		for (const part of content) {
 			if (part.type === "text") {
-				const text = (part as { text?: string }).text ?? "";
-				return `${message.stopReason === "error" ? "✗" : "·"} ${text.slice(0, SNIPPET).replace(/\n+/g, " ")}`;
+				const text = oneLine((part as { text?: string }).text ?? "", SNIPPET_TOOL);
+				if (text === "") return null;
+				return message.stopReason === "error" ? `${RED}  ✗ ${text}${RESET}` : `${DIM}  · ${text}${RESET}`;
 			}
 		}
 	}

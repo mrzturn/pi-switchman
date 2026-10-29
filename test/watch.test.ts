@@ -9,15 +9,20 @@ import { formatChildMessage, startAgentLog, tailAgentLog, TmuxWatch, type TmuxRu
 
 const msg = (over: Record<string, unknown>) => over as never;
 
-test("formatChildMessage: assistant text, toolCall, toolResult", () => {
-	assert.match(formatChildMessage(msg({ role: "assistant", content: [{ type: "text", text: "hello\nworld" }] })) ?? "", /^▶ hello world/);
-	assert.match(formatChildMessage(msg({ role: "assistant", content: [{ type: "toolCall", name: "bash", arguments: { command: "ls" } }] })) ?? "", /^⚙ bash\(/);
-	assert.match(formatChildMessage(msg({ role: "toolResult", content: [{ type: "text", text: "ok" }] })) ?? "", /^· ok/);
-	assert.match(
-		formatChildMessage(msg({ role: "toolResult", stopReason: "error", content: [{ type: "text", text: "boom" }] })) ?? "",
-		/^✗ boom/,
-	);
+test("formatChildMessage: thinking, text, toolCall, toolResult — conversation style", () => {
+	const think = formatChildMessage(msg({ role: "assistant", content: [{ type: "thinking", thinking: "hmm let me look" }] }));
+	assert.match(think ?? "", /💭 hmm let me look/);
+	const say = formatChildMessage(msg({ role: "assistant", content: [{ type: "text", text: "hello\nworld" }] }));
+	assert.match(say ?? "", /▶ hello world/);
+	const act = formatChildMessage(msg({ role: "assistant", content: [{ type: "toolCall", name: "bash", arguments: { command: "ls" } }] }));
+	assert.match(act ?? "", /⚙ bash /);
+	const got = formatChildMessage(msg({ role: "toolResult", content: [{ type: "text", text: "ok" }] }));
+	assert.match(got ?? "", /· ok/);
+	const bad = formatChildMessage(msg({ role: "toolResult", stopReason: "error", content: [{ type: "text", text: "boom" }] }));
+	assert.match(bad ?? "", /✗ boom/);
 	assert.equal(formatChildMessage(msg({ role: "user", content: "hi" })), null);
+	// turn blocks start with a blank line for readability
+	assert.ok((say ?? "").startsWith("\n"));
 });
 
 test("startAgentLog + tailAgentLog round-trip in a private temp dir", () => {
