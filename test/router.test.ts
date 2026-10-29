@@ -93,22 +93,17 @@ test("direct rides the economy lane", async () => {
 
 test("onDecision fires for gate, keep, and switch decisions (footer confidence)", async () => {
 	const seen: { by: string; lane: string; confidence: number; kept: boolean }[] = [];
-	const deps = {
+	const deps = () => ({
 		config: () => CONFIG,
-		registry: fakeRegistry(),
+		registry: fakeRegistry({ models: [...MODELS, IMAGE_MODEL] }),
 		onDecision: (d: { by: string; lane: string; confidence: number; kept: boolean }) => seen.push(d),
-	};
-	// gate: image request records the vision-gate decision
-	const imageRequest = request({ reason: "direct" }) as { messages: { role: string; content: unknown }[] };
-	imageRequest.messages = [
-		...imageRequest.messages.slice(0, -1),
-		{ role: "user", content: [{ type: "text", text: "look" }, { type: "image", mimeType: "image/png", data: "x" }] },
-	];
-	await routeCore(deps, imageRequest as never);
+	});
+	// gate: image request records the vision-gate decision (bypasses classifier)
+	await routeCore(deps(), { ...toolImageRequest, previous: { model: { provider: "p", id: "model-mid" }, thinkingLevel: "high" as never } });
 	assert.ok(seen.some((d) => d.lane === "vision" && d.by === "builtin" && d.confidence === 1));
 	// plain decision records lane + confidence
 	seen.length = 0;
-	await routeCore(deps, request({ reason: "direct" }));
+	await routeCore(deps(), request({ reason: "direct" }));
 	assert.equal(seen.length, 1);
 	assert.equal(seen[0].lane, "economy");
 	assert.ok(seen[0].confidence >= 0);
