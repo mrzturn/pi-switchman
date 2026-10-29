@@ -84,29 +84,12 @@ export function applyWatermark(pi: ExtensionAPI, deps: WatermarkDeps): void {
 					notify(ctx, `switchman: hard tier (${Math.round(usage.percent)}%) — read compression tightened`, "warning");
 				} else if (tier === "force" && Date.now() - lastCompactAt > COMPACT_COOLDOWN_MS) {
 					lastCompactAt = Date.now();
-					let pending = "(none)";
-					try {
-						pending = ledgerSummary(ledgerFromBranch(ctx.sessionManager.getBranch()));
-					} catch {
-						/* advisory */
-					}
-					notify(ctx, `switchman: force tier (${Math.round(usage.percent)}%) — compacting with dispatch ledger`, "warning");
-					// fire-and-forget: compact() is async and rejects prompt() while in
-					// progress ("Cannot submit a prompt while compaction is in progress"),
-					// so the auto-continue must ride onComplete — after the abort gate clears.
-					ctx.compact({
-						customInstructions: `[SWITCHMAN] Preserve the dispatch ledger (recent dispatches below) and the current routing lane when summarizing. Recent dispatches:\n${pending}`,
-						onComplete: () => {
-							try {
-								deps.afterCompact?.(ctx); // auto-continue: queue the next turn without user input
-							} catch {
-								/* fail-open */
-							}
-						},
-						onError: (error) => {
-							notify(ctx, `switchman: force-tier compaction failed (${error.message}) — auto-continue skipped`, "warning");
-						},
-					});
+					// NEVER ctx.compact() here: turn_end always fires inside a live agent
+					// run, and compact() aborts the agent first — the "This operation was
+					// aborted" dead turns were self-inflicted by exactly this call. pi's own
+					// threshold/overflow compaction runs at a safe point instead, and the
+					// ledger survives via the session_before_compact/session_compact pair.
+					notify(ctx, `switchman: force tier (${Math.round(usage.percent)}%) — pi will auto-compact; ledger restore armed`, "warning");
 				}
 			}
 			lastTier = tier;

@@ -105,7 +105,7 @@ test("endpointPrefill: defaults for a fresh entry, values for an existing one", 
 	assert.deepEqual(existing, ["sw", "http://h/s1", "tev1", "k"]);
 });
 
-test("watermark: force tier compacts once and fires the auto-continue", async () => {
+test("watermark: force tier never compacts mid-run (pi's own compaction owns it)", async () => {
 	const handlers = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
 	const pi = {
 		on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
@@ -117,15 +117,18 @@ test("watermark: force tier compacts once and fires the auto-continue", async ()
 	} as never;
 	let scales: number[] = [];
 	let compacted = 0;
-	let continued = 0;
 	const ctx = {
-		hasUI: false,
+		hasUI: true,
 		getContextUsage: () => ({ percent: 0.96 }),
-		compact: (options?: { onComplete?: (result: unknown) => void }) => {
+		// compact() aborts a live agent run first — the historical "This operation
+		// was aborted" dead turns were self-inflicted by calling it from turn_end.
+		compact: () => {
 			compacted++;
-			options?.onComplete?.({}); // continuation rides onComplete — the prompt gate is still closed during compact()
 		},
-		sessionManager: {}, // getBranch() missing -> ledger summary fails open
+		sessionManager: {},
+		registerStatusItem: () => {},
+		updateStatusItem: () => {},
+		sendMessage: () => {},
 	} as never;
 	applyWatermark(pi, {
 		config: () => ({
@@ -135,20 +138,12 @@ test("watermark: force tier compacts once and fires the auto-continue", async ()
 		}),
 		setThresholdScale: (scale) => scales.push(scale),
 		onTier: () => {},
-		afterCompact: () => {
-			continued++;
-		},
+		afterCompact: () => {},
 	});
 	const turnEnd = handlers.get("turn_end") ?? [];
-	assert.equal(turnEnd.length, 1);
-	await turnEnd[0]({}, ctx);
-	assert.equal(compacted, 1);
-	assert.equal(continued, 1);
+	await turnEnd[0]({ message: { stopReason: "toolUse" } }, ctx); // normal turn crossing force tier
+	assert.equal(compacted, 0, "turn_end must never call ctx.compact — it aborts the live run");
 	assert.ok(scales.includes(DEFAULT_CONFIG.compress.hardRatio)); // fuse tightened
-	// second fire within the cooldown: compaction and continuation not repeated
-	await turnEnd[0]({}, ctx);
-	assert.equal(compacted, 1);
-	assert.equal(continued, 1);
 });
 
 function watermarkHarness(branch: unknown[], usage = { percent: 0.5 }) {

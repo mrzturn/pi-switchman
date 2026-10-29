@@ -25,6 +25,7 @@ import { registerRouter } from "./router.ts";
 import { registerVisionRelay } from "./vision-relay.ts";
 import { registerDecisionEndpoint } from "./decision-model.ts";
 import { applyWatermark, AUTO_CONTINUE_MESSAGE, type WatermarkTier } from "./watermark.ts";
+import { LEDGER_RESTORE_TYPE, ledgerRestorePayload, snapshotLedger } from "./ledger.ts";
 import { registerConfigCommand, saveTarget } from "./config-ui.ts";
 import { registerStatusCommand, Stats } from "./status.ts";
 
@@ -166,6 +167,30 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	// ---- [M4] watermark --------------------------------------------------------
+
+	// Ledger survival across pi's automatic compactions: snapshot at
+	// session_before_compact (branch still intact), deterministically restore
+	// as a custom entry once session_compact lands. Replaces the old mid-run
+	// ctx.compact(customInstructions) — the automatic path ignores instructions,
+	// and calling compact ourselves mid-run aborted the live agent run.
+	let ledgerSnapshot: string | null = null;
+	pi.on("session_before_compact", (event) => {
+		try {
+			ledgerSnapshot = snapshotLedger(event.branchEntries);
+		} catch {
+			ledgerSnapshot = null;
+		}
+	});
+	pi.on("session_compact", () => {
+		if (ledgerSnapshot === null) return;
+		const summary = ledgerSnapshot;
+		ledgerSnapshot = null;
+		try {
+			pi.appendEntry(LEDGER_RESTORE_TYPE, ledgerRestorePayload(summary));
+		} catch {
+			/* fail-open */
+		}
+	});
 
 	applyWatermark(pi, {
 		config: () => {

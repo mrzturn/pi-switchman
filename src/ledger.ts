@@ -7,6 +7,9 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
 export const LEDGER_TYPE = "switchman:ledger";
+/** Custom entry appended right after a compaction so recent dispatches
+ *  deterministically survive the branch rewrite. */
+export const LEDGER_RESTORE_TYPE = "switchman:ledger-restore";
 
 export type LedgerStatus = "done" | "error";
 
@@ -74,4 +77,21 @@ export function currentPhysicalModel(branch: readonly SessionEntry[]): { provide
 		}
 	}
 	return null;
+}
+
+/** Snapshot of the dispatch ledger taken at session_before_compact (before
+ *  pi rewrites the branch); null when there is nothing worth restoring. */
+export function snapshotLedger(branch: readonly SessionEntry[]): string | null {
+	try {
+		const records = ledgerFromBranch(branch);
+		if (records.length === 0) return null;
+		return ledgerSummary(records);
+	} catch {
+		return null;
+	}
+}
+
+/** Payload for the post-compaction restore entry (pi.appendEntry). */
+export function ledgerRestorePayload(summary: string): Record<string, unknown> {
+	return { summary, restoredAt: new Date().toISOString() };
 }

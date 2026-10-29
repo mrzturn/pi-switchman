@@ -111,7 +111,7 @@ export const DEFAULT_CONFIG: SwitchmanConfig = {
 		switchConfidence: 0.8,
 		cacheWindowMs: 300_000,
 		decisionIntervalMs: 60_000,
-		decisionTimeoutMs: 2000,
+		decisionTimeoutMs: 8000,
 		decisionModel: null,
 		decisionEndpoint: null,
 		visionRelayThresholdTokens: 50_000,
