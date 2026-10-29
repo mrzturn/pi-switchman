@@ -80,6 +80,11 @@ export type TmuxRunner = (binary: string, args: string[]) => { status: number | 
 
 const spawnRunner: TmuxRunner = (binary, args) => {
 	const run = spawnSync(binary, args, { encoding: "utf8", timeout: 5000 });
+	try {
+		appendFileSync("/tmp/switchman-tmux-debug.log", `[${new Date().toISOString()}] pid=${process.pid} tmux ${args.map((a) => JSON.stringify(a)).join(" ")} -> status=${run.status} out=${JSON.stringify(run.stdout?.slice(0, 120))} err=${JSON.stringify(run.stderr?.slice(0, 120))}\n`);
+	} catch {
+		/* debug trace never breaks the watch */
+	}
 	return { status: run.status, stdout: run.stdout ?? "", stderr: run.stderr ?? "" };
 };
 
@@ -135,20 +140,21 @@ export class TmuxWatch {
 		if (this.tmux === null) return null;
 		try {
 			if (this.mainPane === null) {
-				// Resolve OUR pane via the calling TTY (tmux matches the client on
-				// this tty) — never the ambient "current" context, which is not
-				// reliable for commands spawned without an attached client.
-				let tty = "";
-				try {
-					tty = this.out("display-message", "-p", "#{client_name}");
-				} catch {
-					return null; // no client on this tty → we are not really in tmux
+				// Resolve OUR pane by matching the pane TTY against our controlling
+				// terminal — the client's "current pane" drifts when the user moves
+				// focus, the pane that owns this process's tty never does.
+				const ourTty = this.ttyOf();
+				if (ourTty === null) return null;
+				const listing = this.out("list-panes", "-a", "-F", "#{pane_id}\t#{pane_tty}\t#{window_id}");
+				for (const line of listing.split("\n")) {
+					const [paneId, paneTty, windowId] = line.split("\t");
+					if (paneTty === ourTty) {
+						this.mainPane = paneId;
+						this.target = windowId;
+						break;
+					}
 				}
-				if (tty === "") return null;
-				this.mainPane = this.out("display-message", "-p", "-t", tty, "#{pane_id}");
-				if (this.mainPane === "") return null;
-				this.target = this.out("display-message", "-p", "-t", tty, "#{window_id}");
-				if (this.target === "") return null;
+				if (this.mainPane === null || this.target === null) return null;
 			}
 			const key = `sw-${++this.nextKey}`;
 			this.logPaths.set(key, logPath);
@@ -253,6 +259,17 @@ export class TmuxWatch {
 		const run = this.runner(this.tmux as string, args);
 		if (run.status !== 0) throw new Error(run.stderr.trim() || `tmux ${args[0]} failed`);
 		return run.stdout.trim();
+	}
+
+	/** Our controlling terminal as tmux reports pane_tty (e.g. /dev/ttys004). */
+	private ttyOf(): string | null {
+		try {
+			const run = this.runner("tty", []);
+			const name = run.stdout.trim();
+			return run.status === 0 && name !== "" ? name : null;
+		} catch {
+			return null;
+		}
 	}
 
 	/** Verifies a pane id exists in our tracked window (phantom guard). */
