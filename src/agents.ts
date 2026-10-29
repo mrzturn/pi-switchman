@@ -16,9 +16,51 @@ export interface AgentConfig {
 	/** "provider/model" pin; omitted = inherit the dispatching session's model. */
 	model?: string;
 	systemPrompt: string;
-	source: "user" | "project";
+	source: "user" | "project" | "builtin";
 	filePath: string;
 }
+
+/** Factory agents compiled in — a pi package install ships no agent files
+ *  (pi packages carry extensions/skills/prompts/themes, not agents), so the
+ *  four shipped personas also live here as a floor. User/project .md files
+ *  override built-ins with the same name. */
+export const BUILTIN_AGENTS: AgentConfig[] = [
+	{
+		name: "scout",
+		description: "Fast codebase recon with compressed findings (read-only)",
+		tools: ["read", "grep", "glob", "find", "ls"],
+		systemPrompt:
+			"You are a codebase scout. Your job is fast, read-only reconnaissance: locate code, trace usages, map structure.\n\nRules:\n- Work from the distilled view first; expand specific spans only when needed.\n- Return findings as a compact report: file paths with line ranges, one-line significance each.\n- Never speculate about code you have not read; say what you searched and what you found.\n- Your process is disposable — only the report travels back to the dispatcher.",
+		source: "builtin",
+		filePath: "(builtin)",
+	},
+	{
+		name: "reviewer",
+		description: "Independent code review anchored on correctness and risk",
+		tools: ["read", "grep", "glob", "find", "ls", "bash"],
+		systemPrompt:
+			"You are an independent code reviewer. You review changes you did not author, with no stake in the approach taken.\n\nFocus, in order:\n1. Correctness bugs: logic errors, edge cases, unhandled failures.\n2. Security and data-consistency risks.\n3. Maintainability problems that will bite soon.\n\nRules:\n- Cite file and line for every finding.\n- Distinguish blocking issues from suggestions explicitly.\n- Do not restate the diff; judge it.\n- If the change is sound, say so plainly — do not invent findings.",
+		source: "builtin",
+		filePath: "(builtin)",
+	},
+	{
+		name: "tester",
+		description: "Runs builds and tests, triages failures to first causes",
+		tools: ["read", "bash", "grep", "glob", "ls"],
+		systemPrompt:
+			"You are a test engineer. You run builds and test suites, then triage failures.\n\nRules:\n- Run the project's own test/build commands; discover them before assuming.\n- For failures, isolate the first cause: read the failing assertion, read the code, explain the mechanism in two or three sentences.\n- Report: commands run, pass/fail counts, and one block per failure (test name, mechanism, suspected culprit file).\n- Never modify files; you verify, the dispatcher decides.",
+		source: "builtin",
+		filePath: "(builtin)",
+	},
+	{
+		name: "worker",
+		description: "General-purpose implementation agent with full default tools",
+		systemPrompt:
+			"You are a general-purpose implementation worker dispatched for a self-contained task.\n\nRules:\n- Follow the task brief exactly; when it is ambiguous, choose the interpretation consistent with the surrounding code and state the choice in your report.\n- Make the minimal correct change; keep style consistent with the file you touch.\n- Verify your own work (build/test) when the task implies it.\n- Report: what changed (files + summary), verification results, and anything left open.",
+		source: "builtin",
+		filePath: "(builtin)",
+	},
+];
 
 function parseToolList(value: unknown): string[] | undefined {
 	const raw = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
@@ -92,6 +134,7 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentConfig[] {
 	const userDir = path.join(getAgentDir(), "agents");
 	const projectDir = findNearestProjectAgentsDir(cwd);
 	const byName = new Map<string, AgentConfig>();
+	for (const agent of BUILTIN_AGENTS) byName.set(agent.name, agent); // floor: files override built-ins
 	if (scope !== "project") {
 		for (const agent of loadAgentsFromDir(userDir, "user")) byName.set(agent.name, agent);
 	}

@@ -8,6 +8,7 @@ import test from "node:test";
 import { DEFAULT_CONFIG, mergeConfig, readRawConfig, writeRawConfig } from "../src/config.ts";
 import { currentPhysicalModel, ledgerFromBranch, ledgerSummary } from "../src/ledger.ts";
 import { finalOutput, parseChildLine } from "../src/child.ts";
+import { discoverAgents } from "../src/agents.ts";
 import { filterModels, laneRows, mainRows } from "../src/config-ui.ts";
 import { tierOf } from "../src/watermark.ts";
 
@@ -128,4 +129,17 @@ test("filterModels is generic over provider/id shapes", () => {
 	assert.equal(filterModels(models, "alp").length, 1);
 	assert.equal(filterModels(models, "").length, 2);
 	assert.equal(filterModels(models, "zzz").length, 0);
+});
+
+// ---- builtin agents floor (package installs ship no agent files) ----------
+
+test("discoverAgents: built-in floor when no agent dirs exist (project scope)", () => {
+	const empty = mkdtempSync(join(tmpdir(), "switchman-agents-"));
+	const agents = discoverAgents(empty, "project");
+	const names = agents.map((a) => a.name).sort();
+	assert.deepEqual(names, ["reviewer", "scout", "tester", "worker"]);
+	assert.ok(agents.every((a) => a.source === "builtin"));
+	const scout = agents.find((a) => a.name === "scout");
+	assert.match(scout?.systemPrompt ?? "", /codebase scout/);
+	assert.deepEqual(scout?.tools, ["read", "grep", "glob", "find", "ls"]);
 });

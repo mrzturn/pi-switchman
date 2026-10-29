@@ -19,18 +19,34 @@
 
 出厂 agents：`scout`（侦查）/ `reviewer`（独立复审）/ `tester`（测试分诊）/ `worker`（通用实现）。
 
-## 使用
+## 安装
+
+**方式一：pi 包（推荐，一条命令）**
+
+```bash
+pi install git:github.com/mrzturn/pi-switchman
+```
+
+出厂 agents（scout/reviewer/tester/worker）已编译为内置兜底——未放置任何 agent 文件时自动可用；放入 `~/.pi/agent/agents/*.md` 可覆盖。升级：`pi update --extensions`。
+
+**方式二：开发安装（本仓库 clone 后）**
 
 ```bash
 # 试运行
 pi --extension ./src/index.ts
 
-# 安装为用户扩展（含出厂 agents）
+# 安装为用户扩展（含出厂 agents 文件版，覆盖内置）
 ln -s "$(pwd)/src" ~/.pi/agent/extensions/pi-switchman
 mkdir -p ~/.pi/agent/agents
 for f in agents/*.md; do ln -s "$(pwd)/$f" ~/.pi/agent/agents/$(basename "$f"); done
+```
 
-# 路由：/model 里选 switchman/auto；配置：/switchman-config；状态：/switchman-status
+> 非 npm 包：宿主依赖（pi-ai / pi-agent-core / pi-coding-agent）由 pi 提供，`peerDependencies: "*"`，无需 `npm install`。
+
+## 使用
+
+```bash
+# 路由：/model 里选 switchman/auto；配置：/switchman-config；状态：/switchman-status；子智能体日志：/switchman-agents
 ```
 
 配置（全部可省，开箱即用；TUI 只是 JSON 的编辑器）：
