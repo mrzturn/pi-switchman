@@ -1,0 +1,19 @@
+{
+  "name": "db-query-skill",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Read-only database query verification skill (MySQL / Redis)",
+  "engines": {
+    "node": ">=18"
+  },
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "setup": "bash scripts/setup.sh"
+  },
+  "dependencies": {
+    "dotenv": "16.6.1",
+    "mysql2": "3.24.6",
+    "redis": "4.7.1"
+  }
+}
