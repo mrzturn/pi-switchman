@@ -24,26 +24,32 @@ test("global overrides defaults, project overrides global", () => {
 	assert.equal(merged1.compress.threshold, 12345);
 	assert.equal(merged1.compress.readHead, 30);
 	assert.equal(merged1.compress.readTail, DEFAULT_CONFIG.compress.readTail); // untouched
-	assert.equal(merged1.watermark.soft, DEFAULT_CONFIG.watermark.soft);
+	assert.deepEqual(merged1.watermark.soft, DEFAULT_CONFIG.watermark.soft);
 
 	const merged2 = mergeConfig(merged1, { compress: { threshold: 99 }, watermark: { soft: 50 } });
 	assert.equal(merged2.compress.threshold, 99);
 	assert.equal(merged2.compress.readHead, 30); // global layer survives
-	assert.equal(merged2.watermark.soft, 50);
+	assert.equal(merged2.watermark.soft.percent, 50);
+	// absolute token budgets: plain number = percent; object sets percent/tokens
+	const merged3 = mergeConfig(merged2, { watermark: { soft: { tokens: 80_000 }, hard: { percent: 60, tokens: 120_000 } } });
+	assert.equal(merged3.watermark.soft.percent, 50); // inherited from the layer below
+	assert.equal(merged3.watermark.soft.tokens, 80_000);
+	assert.equal(merged3.watermark.hard.percent, 60);
+	assert.equal(merged3.watermark.hard.tokens, 120_000);
 });
 
 test("invalid values fall back to the layer below (fail-open)", () => {
 	const merged = mergeConfig(DEFAULT_CONFIG, {
 		compress: { threshold: -5, readHead: "many", enabled: "yes", hardRatio: 2 },
-		watermark: { soft: 0, hard: 150, force: null },
+		watermark: { soft: 0, hard: { percent: 150, tokens: -5}, force: null },
 		disabled: 1,
 	});
 	assert.equal(merged.compress.threshold, DEFAULT_CONFIG.compress.threshold);
 	assert.equal(merged.compress.readHead, DEFAULT_CONFIG.compress.readHead);
 	assert.equal(merged.compress.enabled, DEFAULT_CONFIG.compress.enabled);
 	assert.equal(merged.compress.hardRatio, DEFAULT_CONFIG.compress.hardRatio);
-	assert.equal(merged.watermark.soft, DEFAULT_CONFIG.watermark.soft);
-	assert.equal(merged.watermark.hard, DEFAULT_CONFIG.watermark.hard);
+	assert.deepEqual(merged.watermark.soft, DEFAULT_CONFIG.watermark.soft);
+	assert.deepEqual(merged.watermark.hard, DEFAULT_CONFIG.watermark.hard);
 	assert.equal(merged.disabled, DEFAULT_CONFIG.disabled);
 });
 

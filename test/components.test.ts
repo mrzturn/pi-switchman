@@ -62,12 +62,24 @@ test("finalOutput extracts the last assistant text", () => {
 
 // ---- watermark tier --------------------------------------------------------------
 
-test("tierOf thresholds (percent is 0-100: pi returns (tokens/window)*100)", () => {
-	const watermark = DEFAULT_CONFIG.watermark;
-	assert.equal(tierOf(50, watermark), "ok");
-	assert.equal(tierOf(71, watermark), "soft");
-	assert.equal(tierOf(86, watermark), "hard");
-	assert.equal(tierOf(96, watermark), "force");
+test("tierOf: percent form, token form, and min() of both", () => {
+	const w = DEFAULT_CONFIG.watermark; // {70%} {85%} {95%}
+	const usage = (tokens: number, window = 100_000) => ({ tokens, contextWindow: window, percent: (tokens / window) * 100 });
+	assert.equal(tierOf(usage(50_000), w), "ok");
+	assert.equal(tierOf(usage(71_000), w), "soft");
+	assert.equal(tierOf(usage(86_000), w), "hard");
+	assert.equal(tierOf(usage(96_000), w), "force");
+	// absolute budgets on a 1M window: 80k/120k/150k fire far below the percents
+	const abs = { soft: { tokens: 80_000 }, hard: { tokens: 120_000 }, force: { tokens: 150_000 } };
+	const big = (tokens: number) => ({ tokens, contextWindow: 1_000_000, percent: (tokens / 1_000_000) * 100 });
+	assert.equal(tierOf(big(79_999), abs), "ok");
+	assert.equal(tierOf(big(80_000), abs), "soft");
+	assert.equal(tierOf(big(120_000), abs), "hard");
+	assert.equal(tierOf(big(150_000), abs), "force");
+	// mixed: min(percent, tokens) — 70% of 100k = 70k vs tokens 80k → 70k wins
+	const mixed = { soft: { percent: 70, tokens: 80_000 }, hard: { percent: 85 }, force: { percent: 95 } };
+	assert.equal(tierOf(usage(70_000), mixed), "soft");
+	assert.equal(tierOf(usage(69_000), mixed), "ok");
 });
 
 // ---- config schema + round-trip ---------------------------------------------------

@@ -11,11 +11,34 @@ export type WatermarkTier = "ok" | "soft" | "hard" | "force";
 
 const TIER_RANK: Record<WatermarkTier, number> = { ok: 0, soft: 1, hard: 2, force: 3 };
 
-/** Pure tier computation (test-locked). */
-export function tierOf(percent: number, config: WatermarkConfig): WatermarkTier {
-	if (percent >= config.force) return "force";
-	if (percent >= config.hard) return "hard";
-	if (percent >= config.soft) return "soft";
+/** Effective trigger percent of one threshold: the percent form and the
+ *  absolute-token form (converted against the live context window), whichever
+ *  fires first — min(percent, tokens/window*100). Pure. */
+export function effectiveThreshold(
+	threshold: { percent?: number; tokens?: number },
+	contextWindow: number,
+): number {
+	const byPercent = threshold.percent ?? Number.POSITIVE_INFINITY;
+	const byTokens =
+		threshold.tokens !== undefined && contextWindow > 0
+			? (threshold.tokens / contextWindow) * 100
+			: Number.POSITIVE_INFINITY;
+	return Math.min(byPercent, byTokens);
+}
+
+/** Pure tier computation from actual context usage (test-locked). The
+ *  percentage is derived from tokens/window when possible (the source of
+ *  truth), falling back to the reported percent. */
+export function tierOf(
+	usage: { percent: number | null; tokens: number | null; contextWindow: number },
+	config: WatermarkConfig,
+): WatermarkTier {
+	const percent =
+		usage.tokens !== null && usage.contextWindow > 0 ? (usage.tokens / usage.contextWindow) * 100 : usage.percent;
+	if (percent === null) return "ok";
+	if (percent >= effectiveThreshold(config.force, usage.contextWindow)) return "force";
+	if (percent >= effectiveThreshold(config.hard, usage.contextWindow)) return "hard";
+	if (percent >= effectiveThreshold(config.soft, usage.contextWindow)) return "soft";
 	return "ok";
 }
 
@@ -68,8 +91,8 @@ export function applyWatermark(pi: ExtensionAPI, deps: WatermarkDeps): void {
 			}
 
 			const usage = ctx.getContextUsage();
-			if (usage === undefined || usage.percent === null) return;
-			const tier = tierOf(usage.percent, config.watermark);
+			if (usage === undefined || (usage.percent === null && usage.tokens === null)) return;
+			const tier = tierOf(usage, config.watermark);
 			deps.onTier?.(tier);
 
 			// Fuse: hard tier tightens the compression threshold; leaving relaxes it.

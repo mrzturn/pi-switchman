@@ -23,10 +23,19 @@ export interface CompressConfig {
 	hardRatio: number;
 }
 
+/** One watermark threshold: percent of the context window and/or an absolute
+ *  token budget. The tier fires at whichever comes first (the smaller). */
+export interface WatermarkThreshold {
+	/** Percent of context window, 0-100. */
+	percent?: number;
+	/** Absolute context tokens (e.g. 80000 = 80k). */
+	tokens?: number;
+}
+
 export interface WatermarkConfig {
-	soft: number;
-	hard: number;
-	force: number;
+	soft: WatermarkThreshold;
+	hard: WatermarkThreshold;
+	force: WatermarkThreshold;
 }
 
 export type LaneName = "hard" | "main" | "economy" | "review" | "vision";
@@ -103,7 +112,7 @@ export const DEFAULT_CONFIG: SwitchmanConfig = {
 		genericTail: 10,
 		hardRatio: 0.4,
 	},
-	watermark: { soft: 70, hard: 85, force: 95 },
+	watermark: { soft: { percent: 70 }, hard: { percent: 85 }, force: { percent: 95 } },
 	anchors: [],
 	router: {
 		enabled: true,
@@ -148,11 +157,15 @@ function ratioOr(source: Record<string, unknown>, key: string, fallback: number)
 	return fallback;
 }
 
-function percentOr(source: Record<string, unknown>, key: string, fallback: number): number {
-	const value = source[key];
-	// Watermark thresholds are percentages on pi's getContextUsage scale (0-100).
+function percentValue(value: unknown): number | null {
+	// Watermark percents live on pi's getContextUsage scale (0-100).
 	if (typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 100) return value;
-	return fallback;
+	return null;
+}
+
+function positiveIntValue(value: unknown): number | undefined {
+	if (typeof value === "number" && Number.isFinite(value) && value >= 1) return Math.floor(value);
+	return undefined;
 }
 
 function modelRefOf(value: unknown): ModelRef | null {
@@ -198,10 +211,29 @@ export function mergeConfig(base: SwitchmanConfig, override: Record<string, unkn
 
 	const watermark = override.watermark;
 	if (isPlainObject(watermark)) {
+		const threshold = (value: unknown, base: WatermarkThreshold): WatermarkThreshold => {
+			// Plain number keeps the percent form (and inherits the base token
+			// budget); an object sets percent/tokens independently, each
+			// inheriting from the layer below when omitted.
+			if (typeof value === "number") {
+				const percent = percentValue(value);
+				return percent === null ? base : { percent, tokens: base.tokens };
+			}
+			if (isPlainObject(value)) {
+				// invalid values fall back to the layer below (fail-open)
+				const percent = value.percent === undefined ? base.percent : (percentValue(value.percent) ?? base.percent);
+				const tokens = value.tokens === undefined ? base.tokens : (positiveIntValue(value.tokens) ?? base.tokens);
+				const merged: WatermarkThreshold = {};
+				if (percent !== undefined) merged.percent = percent;
+				if (tokens !== undefined) merged.tokens = tokens;
+				return merged;
+			}
+			return base;
+		};
 		out.watermark = {
-			soft: percentOr(watermark, "soft", base.watermark.soft),
-			hard: percentOr(watermark, "hard", base.watermark.hard),
-			force: percentOr(watermark, "force", base.watermark.force),
+			soft: threshold(watermark.soft, base.watermark.soft),
+			hard: threshold(watermark.hard, base.watermark.hard),
+			force: threshold(watermark.force, base.watermark.force),
 		};
 	}
 
