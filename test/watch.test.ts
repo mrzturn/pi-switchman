@@ -45,52 +45,80 @@ test("TmuxWatch: corrupted tmux binary fails open (attach null, no throw)", () =
 	assert.equal(watch.attach("/tmp/x.log"), null);
 });
 
-test("TmuxWatch: window is created AND selected; splits tile; detach lingers, kills, and focus returns", () => {
+test("TmuxWatch: right-column layout, background queue, seamless handoff, fullscreen restore", () => {
 	const calls: string[][] = [];
 	const out = new Map<string, string>([
-		["display-message", "@0"], // origin window
-		["new-window", "@9"], // agents window id
-		["split-window", "%5"],
-		["split-window-2", "%6"],
+		["display-message", "%0"], // main pane
+		["split-window-h", "%1"], // slot 0 (right column)
+		["split-window-v", "%2"], // slot 1 (stacked)
 	]);
-	let splitCalls = 0;
-	const runner: TmuxRunner = (binary, args) => {
+	const runner: TmuxRunner = (_b, args) => {
 		calls.push(args);
-		const cmd = args[0];
-		const key = cmd === "split-window" ? `split-window${++splitCalls > 1 ? "-2" : ""}` : cmd;
-		return { status: 0, stdout: out.get(key) ?? "", stderr: "" };
+		const cmd =
+			args[0] === "split-window" && args.includes("-h")
+				? "split-window-h"
+				: args[0] === "split-window" && args.includes("-v")
+					? "split-window-v"
+					: args[0];
+		return { status: 0, stdout: out.get(cmd) ?? "", stderr: "" };
 	};
-	const watch = new TmuxWatch("in-tmux", "tmux", runner, 0); // no linger for the test
-	assert.equal(watch.attach("/tmp/a.log"), "@9.0");
-	assert.equal(watch.attach("/tmp/b.log"), "%5");
-	assert.equal(watch.attach("/tmp/c.log"), "%6");
-	// first attach: capture origin, create window, SELECT it (visible split)
-	assert.deepEqual(calls[0], ["display-message", "-p", "#{window_id}"]);
-	assert.deepEqual(calls[1].slice(0, 4), ["new-window", "-d", "-n", "switchman-agents"]);
-	assert.ok(calls[1].includes("bash"));
-	assert.deepEqual(calls[2], ["select-window", "-t", "@9"]);
-	// subsequent: split into the same window + tiled layout
-	assert.equal(calls[3][0], "split-window");
-	assert.equal(calls[3][3], "@9");
-	assert.deepEqual(calls[4], ["select-layout", "-t", "@9", "tiled"]);
-	// detach: pane killed per agent; window dies with the last, focus restored
-	watch.detach("%5");
-	watch.detach("%6");
-	watch.detach("@9.0");
-	const flat = calls.map((c) => c.join(" "));
-	assert.ok(flat.some((c) => c === "kill-pane -t %5"));
-	assert.ok(flat.includes("select-window -t @0"), "focus returns to the origin window before kill-window");
-	assert.ok(flat.includes("kill-window -t @9"));
+	const watch = new TmuxWatch("in-tmux", "tmux", runner, 0);
+	const a = watch.attach("/tmp/a.log");
+	const b = watch.attach("/tmp/b.log");
+	const c = watch.attach("/tmp/c.log");
+	assert.match(a ?? "", /^sw-/);
+	assert.match(b ?? "", /^sw-/);
+	// first displayed: horizontal split FROM the main pane — pi keeps the left
+	const splitH = calls.find((x) => x[0] === "split-window" && x.includes("-h"));
+	assert.ok(splitH, "first pane splits the main pane horizontally");
+	assert.equal(splitH?.[4], "%0");
+	// second displayed: vertical split of the right column
+	const splitV = calls.find((x) => x[0] === "split-window" && x.includes("-v"));
+	assert.equal(splitV?.[4], "%1");
+	// third agent: background — no pane created for it
+	const splits = calls.filter((x) => x[0] === "split-window");
+	assert.equal(splits.length, 2, "max 2 displayed panes");
+	// agent a finishes while c waits: seamless respawn into a's pane
+	watch.detach(a);
+	const respawn = calls.find((x) => x[0] === "respawn-pane");
+	assert.ok(respawn, "slot handed off via respawn-pane");
+	assert.equal(respawn?.[3], "%1");
+	assert.ok(respawn?.includes("/tmp/c.log"), "respawn tails the queued agent's log");
+	// c (now displayed) and b finish: no queue — panes linger-close (linger 0 in test)
+	watch.detach(c);
+	watch.detach(b);
+	const kills = calls.filter((x) => x[0] === "kill-pane").map((x) => x[3]);
+	assert.deepEqual(kills.sort(), ["%1", "%2"], "both right panes closed — main pane returns to full width");
+	assert.ok(!calls.some((x) => x[0] === "new-window" || x[0] === "select-window"), "never leaves the current window");
+});
+
+test("TmuxWatch: background agent finishing just leaves the queue", () => {
+	const calls: string[][] = [];
+	const runner: TmuxRunner = (_b, args) => {
+		calls.push(args);
+		return { status: 0, stdout: args[0] === "display-message" ? "%0" : "%1", stderr: "" };
+	};
+	const watch = new TmuxWatch("in-tmux", "tmux", runner, 0);
+	const a = watch.attach("/tmp/a.log");
+	watch.attach("/tmp/b.log");
+	watch.attach("/tmp/c.log"); // background (only 1 slot in this config? default 2 — c is bg)
+	watch.detach("sw-3"); // background agent finishes
+	assert.ok(!calls.some((x) => x[0] === "kill-pane" || x[0] === "respawn-pane"), "no pane churn for background agents");
+	// displayed agent then finishes with empty queue: pane closes
+	watch.detach(a);
+	assert.ok(calls.some((x) => x[0] === "kill-pane"));
 });
 
 test("TmuxWatch: linger defers the kill", () => {
 	const calls: string[][] = [];
 	const runner: TmuxRunner = (_b, args) => {
 		calls.push(args);
-		return { status: 0, stdout: args[0] === "new-window" ? "@9" : args[0] === "display-message" ? "@0" : "", stderr: "" };
+		const cmd = args[0] === "split-window" ? "split-window-h" : args[0];
+		const stdout = cmd === "split-window-h" ? "%1" : cmd === "display-message" ? "%0" : "";
+		return { status: 0, stdout, stderr: "" };
 	};
 	const watch = new TmuxWatch("in-tmux", "tmux", runner, 60);
-	assert.equal(watch.attach("/tmp/a.log"), "@9.0");
-	watch.detach("@9.0");
+	assert.equal(watch.attach("/tmp/a.log"), "sw-1");
+	watch.detach("sw-1");
 	assert.equal(calls.filter((c) => c[0] === "kill-pane").length, 0, "not killed yet — lingering");
 });

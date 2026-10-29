@@ -11,7 +11,6 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Message } from "@earendil-works/pi-agent-core";
 
-const TMUX_WINDOW = "switchman-agents";
 const SNIPPET = 200;
 const DETACH_LINGER_MS = 4000;
 
@@ -84,104 +83,150 @@ const spawnRunner: TmuxRunner = (binary, args) => {
 	return { status: run.status, stdout: run.stdout ?? "", stderr: run.stderr ?? "" };
 };
 
-/** Live tmux panes watching agent logs. One window, tiled panes, focused. */
+/** In-window live watch: the pi pane stays put on the left; a right column
+ *  shows at most `maxDisplayed` agents stacked evenly (split -h then -v).
+ *  Extra agents run in the background (logs keep writing); when a displayed
+ *  agent finishes, the next background agent respawns into its pane — no
+ *  layout churn. Killing the last pane restores the main pane to full width
+ *  automatically. All tmux interaction fails open. */
 export class TmuxWatch {
 	private readonly tmux: string | null;
 	private readonly runner: TmuxRunner;
 	private readonly lingerMs: number;
-	private paneCount = 0;
-	private windowId: string | null = null;
-	private originWindow: string | null = null;
+	private readonly maxDisplayed: number;
+	private mainPane: string | null = null;
+	private nextKey = 0;
+	/** Displayed slots: paneId per slot, and which agent key it shows. */
+	private readonly slots: Array<{ paneId: string; key: string } | null> = [];
+	/** Background agent keys (FIFO — first queued takes the first freed slot). */
+	private readonly queue: string[] = [];
+	private readonly logPaths = new Map<string, string>();
 
-	constructor(tmuxEnv?: string, tmuxBinary = "tmux", runner: TmuxRunner = spawnRunner, lingerMs = DETACH_LINGER_MS) {
+	constructor(
+		tmuxEnv?: string,
+		tmuxBinary = "tmux",
+		runner: TmuxRunner = spawnRunner,
+		lingerMs = 4000,
+		maxDisplayed = 2,
+	) {
 		const env = tmuxEnv !== undefined ? tmuxEnv : process.env.TMUX;
 		this.tmux = env ? tmuxBinary : null;
 		this.runner = runner;
 		this.lingerMs = lingerMs;
+		this.maxDisplayed = Math.max(1, maxDisplayed);
+		for (let i = 0; i < this.maxDisplayed; i++) this.slots.push(null);
 	}
 
 	get active(): boolean {
 		return this.tmux !== null;
 	}
 
-	/** Open a pane tailing the log; null when not in tmux or tmux failed.
-	 *  The window is selected on first attach so the split is actually
-	 *  visible (creating a background window nobody looks at is useless). */
+	private tailCommand(logPath: string): string {
+		return `tail -n +1 -f ${JSON.stringify(logPath)}; echo "[switchman] agent stream ended"`;
+	}
+
+	/** Register an agent; returns its key (pass to detach), or null when not
+	 *  in tmux / tmux broken. Displayed when a slot is free, else background. */
 	attach(logPath: string): string | null {
 		if (this.tmux === null) return null;
-		const command = `tail -n +1 -f ${JSON.stringify(logPath)}; echo "[switchman] agent stream ended"`;
 		try {
-			if (this.originWindow === null) {
-				this.originWindow = this.out("display-message", "-p", "#{window_id}") || null;
+			if (this.mainPane === null) {
+				this.mainPane = this.out("display-message", "-p", "#{pane_id}") || null;
+				if (this.mainPane === null) return null;
 			}
-			let paneId: string;
-			if (this.paneCount === 0) {
-				this.windowId = this.out(
-					"new-window",
-					"-d",
-					"-n",
-					TMUX_WINDOW,
-					"-P",
-					"-F",
-					"#{window_id}",
-					"bash",
-					"-c",
-					command,
-				);
-				if (this.windowId === "") {
-					this.windowId = null;
-					return null;
-				}
-				// Show the split instead of leaving it in a background tab.
-				this.try("select-window", "-t", this.windowId);
-				// -P -F "#{window_id}" returned the WINDOW id; panes inside it are
-				// addressed by index — pane 0 is the one we just created.
-				paneId = `${this.windowId}.0`;
-			} else {
-				paneId = this.out(
-					"split-window",
-					"-d",
-					"-t",
-					this.windowId ?? TMUX_WINDOW,
-					"-P",
-					"-F",
-					"#{pane_id}",
-					"bash",
-					"-c",
-					command,
-				);
-				if (paneId === "") return null;
-				this.try("select-layout", "-t", this.windowId ?? TMUX_WINDOW, "tiled");
-			}
-			this.paneCount++;
-			return paneId;
+			const key = `sw-${++this.nextKey}`;
+			this.logPaths.set(key, logPath);
+			const slot = this.slots.indexOf(null);
+			if (slot !== -1) this.openSlot(slot, key);
+			else this.queue.push(key);
+			return key;
 		} catch {
 			return null;
 		}
 	}
 
-	/** Close one agent's pane after a short linger (the exit line stays
-	 *  readable); the window dies with its last pane and focus returns to
-	 *  the window the user came from. */
-	detach(paneId: string | null): void {
-		if (paneId === null || this.tmux === null) return;
+	private openSlot(slot: number, key: string): void {
+		const logPath = this.logPaths.get(key);
+			if (logPath === undefined) return;
+		const occupied = this.slots.filter((s): s is { paneId: string; key: string } => s !== null);
+		let paneId: string;
+		if (occupied.length === 0) {
+			// Right column: split the MAIN pane horizontally — pi keeps its left.
+			paneId = this.out(
+				"split-window",
+				"-h",
+				"-d",
+				"-t",
+				this.mainPane as string,
+				"-p",
+				"50",
+				"-P",
+				"-F",
+				"#{pane_id}",
+				"bash",
+				"-c",
+				this.tailCommand(logPath),
+			);
+		} else {
+			// Further slots stack the right column vertically (evenly).
+			paneId = this.out(
+				"split-window",
+				"-v",
+				"-d",
+				"-t",
+				occupied[0].paneId,
+				"-P",
+				"-F",
+				"#{pane_id}",
+				"bash",
+				"-c",
+				this.tailCommand(logPath),
+			);
+		}
+		if (paneId === "") return;
+		this.slots[slot] = { paneId, key };
+	}
+
+	/** An agent finished. Displayed slot: hand off to the next background
+	 *  agent (seamless respawn, same pane) or linger then close. Background:
+	 *  just leaves the queue. When the last pane closes, the main pane
+	 *  returns to full width automatically. */
+	detach(key: string | null): void {
+		if (key === null || this.tmux === null || !this.logPaths.has(key)) return;
+		this.logPaths.delete(key);
+		const slot = this.slots.findIndex((s) => s?.key === key);
+		if (slot === -1) {
+			const queued = this.queue.indexOf(key);
+			if (queued !== -1) this.queue.splice(queued, 1);
+			return;
+		}
+		const paneId = this.slots[slot]?.paneId;
+		if (paneId === undefined) return;
+		const next = this.queue.shift();
+		if (next !== undefined) {
+			// Seamless handoff: the slot respawns tailing the next agent's log.
+			const nextLog = this.logPaths.get(next);
+			if (nextLog !== undefined) {
+				this.slots[slot] = { paneId, key: next };
+				this.try("respawn-pane", "-k", "-t", paneId, "bash", "-c", this.tailCommand(nextLog));
+				return;
+			}
+		}
+		// Last agent in this slot: linger so the exit line is readable, then
+		// close — with the final pane gone, tmux restores the main pane width.
+		this.slots[slot] = null;
 		const kill = () => {
 			this.try("kill-pane", "-t", paneId);
-			this.paneCount = Math.max(0, this.paneCount - 1);
-			if (this.paneCount === 0) {
-				if (this.originWindow !== null) this.try("select-window", "-t", this.originWindow);
-				if (this.windowId !== null) this.try("kill-window", "-t", this.windowId);
-				this.windowId = null;
-			}
 		};
 		if (this.lingerMs <= 0) kill();
-		else setTimeout(() => {
-			try {
-				kill();
-			} catch {
-				/* pane/window may already be gone */
-			}
-		}, this.lingerMs).unref?.();
+		else
+			setTimeout(() => {
+				try {
+					kill();
+				} catch {
+					/* pane may already be gone */
+				}
+			}, this.lingerMs).unref?.();
 	}
 
 	private out(...args: string[]): string {
