@@ -42,6 +42,9 @@ pi --extension ./src/index.ts
 ln -s "$(pwd)/src" ~/.pi/agent/extensions/pi-switchman
 mkdir -p ~/.pi/agent/agents
 for f in agents/*.md; do ln -s "$(pwd)/$f" ~/.pi/agent/agents/$(basename "$f"); done
+
+# 技能随包安装自动发现；开发安装需在 ~/.pi/agent/settings.json 声明：
+# "skills": ["<本仓库绝对路径>/skills"]
 ```
 
 > 非 npm 包：宿主依赖（pi-ai / pi-agent-core / pi-coding-agent）由 pi 提供，`peerDependencies: "*"`，无需 `npm install`。
