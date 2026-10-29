@@ -51,7 +51,7 @@ test("TmuxWatch: right-column layout, background queue, seamless handoff, fullsc
 	let nextPane = 0;
 	const runner: TmuxRunner = (_b, args) => {
 		calls.push(args);
-		if (_b === "tty") return { status: 0, stdout: "/dev/ttysTEST", stderr: "" };
+		if (args[0] === "display-message") return { status: 0, stdout: "@0", stderr: "" };
 		if (args[0] === "list-panes" && args[1] === "-a") {
 			return { status: 0, stdout: [...fakePanes].map((p) => `${p}\t/dev/ttysTEST\t@0`).join("\n"), stderr: "" };
 		}
@@ -65,7 +65,7 @@ test("TmuxWatch: right-column layout, background queue, seamless handoff, fullsc
 		}
 		return { status: 0, stdout: "", stderr: "" };
 	};
-	const watch = new TmuxWatch("in-tmux", "tmux", runner, 0);
+	const watch = new TmuxWatch("in-tmux", "tmux", runner, 0, 2, "%0");
 	const a = watch.attach("/tmp/a.log");
 	const b = watch.attach("/tmp/b.log");
 	const c = watch.attach("/tmp/c.log");
@@ -99,13 +99,13 @@ test("TmuxWatch: background agent finishing just leaves the queue", () => {
 	const calls: string[][] = [];
 	const runner: TmuxRunner = (_b, args) => {
 		calls.push(args);
-		if (_b === "tty") return { status: 0, stdout: "/dev/ttysTEST", stderr: "" };
+		if (args[0] === "display-message") return { status: 0, stdout: "@0", stderr: "" };
 		if (args[0] === "list-panes" && args[1] === "-a") return { status: 0, stdout: "%0\t/dev/ttysTEST\t@0", stderr: "" };
 		if (args[0] === "list-panes") return { status: 0, stdout: "%0\n%1", stderr: "" };
 		if (args[0] === "split-window") return { status: 0, stdout: "%1", stderr: "" };
 		return { status: 0, stdout: "", stderr: "" };
 	};
-	const watch = new TmuxWatch("in-tmux", "tmux", runner, 0);
+	const watch = new TmuxWatch("in-tmux", "tmux", runner, 0, 2, "%0");
 	const a = watch.attach("/tmp/a.log");
 	watch.attach("/tmp/b.log");
 	watch.attach("/tmp/c.log"); // background (only 1 slot in this config? default 2 — c is bg)
@@ -120,12 +120,12 @@ test("TmuxWatch: linger defers the kill", () => {
 	const calls: string[][] = [];
 	const runner: TmuxRunner = (_b, args) => {
 		calls.push(args);
-		if (_b === "tty") return { status: 0, stdout: "/dev/ttysTEST", stderr: "" };
+		if (args[0] === "display-message") return { status: 0, stdout: "@0", stderr: "" };
 		if (args[0] === "list-panes" && args[1] === "-a") return { status: 0, stdout: "%0\t/dev/ttysTEST\t@0", stderr: "" };
 		if (args[0] === "split-window") return { status: 0, stdout: "%1", stderr: "" };
 		return { status: 0, stdout: "", stderr: "" };
 	};
-	const watch = new TmuxWatch("in-tmux", "tmux", runner, 60);
+	const watch = new TmuxWatch("in-tmux", "tmux", runner, 60, 2, "%0");
 	assert.equal(watch.attach("/tmp/a.log"), "sw-1");
 	watch.detach("sw-1");
 	assert.equal(calls.filter((c) => c[0] === "kill-pane").length, 0, "not killed yet — lingering");

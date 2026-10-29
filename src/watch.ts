@@ -81,7 +81,7 @@ export type TmuxRunner = (binary: string, args: string[]) => { status: number | 
 const spawnRunner: TmuxRunner = (binary, args) => {
 	const run = spawnSync(binary, args, { encoding: "utf8", timeout: 5000 });
 	try {
-		appendFileSync("/tmp/switchman-tmux-debug.log", `[${new Date().toISOString()}] pid=${process.pid} tmux ${args.map((a) => JSON.stringify(a)).join(" ")} -> status=${run.status} out=${JSON.stringify(run.stdout?.slice(0, 120))} err=${JSON.stringify(run.stderr?.slice(0, 120))}\n`);
+		appendFileSync("/tmp/switchman-tmux-debug.log", `[${new Date().toISOString()}] pid=${process.pid} ${binary} ${args.map((a) => JSON.stringify(a)).join(" ")} -> status=${run.status} out=${JSON.stringify(run.stdout?.slice(0, 120))} err=${JSON.stringify(run.stderr?.slice(0, 120))}\n`);
 	} catch {
 		/* debug trace never breaks the watch */
 	}
@@ -102,6 +102,7 @@ export class TmuxWatch {
 	private readonly runner: TmuxRunner;
 	private readonly lingerMs: number;
 	private readonly maxDisplayed: number;
+	private readonly tmuxPane: string;
 	private mainPane: string | null = null;
 	private target: string | null = null; // explicit <window-id> for every command
 	private nextKey = 0;
@@ -117,9 +118,11 @@ export class TmuxWatch {
 		runner: TmuxRunner = spawnRunner,
 		lingerMs = 4000,
 		maxDisplayed = 2,
+		tmuxPaneEnv?: string,
 	) {
 		const env = tmuxEnv !== undefined ? tmuxEnv : process.env.TMUX;
 		this.tmux = env ? tmuxBinary : null;
+		this.tmuxPane = tmuxPaneEnv !== undefined ? tmuxPaneEnv : (process.env.TMUX_PANE ?? "");
 		this.runner = runner;
 		this.lingerMs = lingerMs;
 		this.maxDisplayed = Math.max(1, maxDisplayed);
@@ -140,21 +143,13 @@ export class TmuxWatch {
 		if (this.tmux === null) return null;
 		try {
 			if (this.mainPane === null) {
-				// Resolve OUR pane by matching the pane TTY against our controlling
-				// terminal — the client's "current pane" drifts when the user moves
-				// focus, the pane that owns this process's tty never does.
-				const ourTty = this.ttyOf();
-				if (ourTty === null) return null;
-				const listing = this.out("list-panes", "-a", "-F", "#{pane_id}\t#{pane_tty}\t#{window_id}");
-				for (const line of listing.split("\n")) {
-					const [paneId, paneTty, windowId] = line.split("\t");
-					if (paneTty === ourTty) {
-						this.mainPane = paneId;
-						this.target = windowId;
-						break;
-					}
-				}
-				if (this.mainPane === null || this.target === null) return null;
+				// tmux injects TMUX_PANE into every pane process — it IS our pane,
+				// no resolution required. (client_name is the outer terminal's tty,
+				// not the pane tty; `tty` fails because pi's stdin is not the pane.)
+				this.mainPane = this.tmuxPane;
+				if (this.mainPane === "") return null;
+				this.target = this.out("display-message", "-p", "-t", this.mainPane, "#{window_id}");
+				if (this.target === "") return null;
 			}
 			const key = `sw-${++this.nextKey}`;
 			this.logPaths.set(key, logPath);
@@ -259,17 +254,6 @@ export class TmuxWatch {
 		const run = this.runner(this.tmux as string, args);
 		if (run.status !== 0) throw new Error(run.stderr.trim() || `tmux ${args[0]} failed`);
 		return run.stdout.trim();
-	}
-
-	/** Our controlling terminal as tmux reports pane_tty (e.g. /dev/ttys004). */
-	private ttyOf(): string | null {
-		try {
-			const run = this.runner("tty", []);
-			const name = run.stdout.trim();
-			return run.status === 0 && name !== "" ? name : null;
-		} catch {
-			return null;
-		}
 	}
 
 	/** Verifies a pane id exists in our tracked window (phantom guard). */
