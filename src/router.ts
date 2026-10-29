@@ -59,6 +59,22 @@ export const routerStats = {
 export interface RouterDeps {
 	config: () => SwitchmanConfig;
 	registry: RegistryLike;
+	/** Called with every recorded decision (gate, keep, switch) — the footer
+	 *  status uses it to surface the decision model's confidence live. */
+	onDecision?: (decision: { by: "classifier" | "builtin"; lane: LaneName; confidence: number; kept: boolean }) => void;
+}
+
+/** Single decision recorder: stats + optional live footer callback. */
+function recordDecision(
+	deps: RouterDeps,
+	decision: { by: "classifier" | "builtin"; lane: LaneName; confidence: number; kept: boolean },
+): void {
+	routerStats.lastDecision = { ts: Date.now(), ...decision };
+	try {
+		deps.onDecision?.(decision);
+	} catch {
+		/* footer status is advisory */
+	}
 }
 
 const LANE_CRITERIA: Record<LaneName, string> = {
@@ -223,7 +239,7 @@ export async function routeCore(deps: RouterDeps, request: RouteRequestLike): Pr
 		for (const facts of available) pushIfCapable(facts);
 		const pick = imageRefs[0];
 		if (pick !== undefined) {
-			routerStats.lastDecision = { ts: now, by: "builtin", lane: "vision", confidence: 1, kept: false };
+			recordDecision(deps, { by: "builtin", lane: "vision", confidence: 1, kept: false });
 			return {
 				ref: pick,
 				thinking: request.thinkingLevel,
@@ -310,11 +326,11 @@ export async function routeCore(deps: RouterDeps, request: RouteRequestLike): Pr
 	});
 
 	if (verdict.action === "keep" && prevRef !== null) {
-		routerStats.lastDecision = { ts: now, by, lane, confidence, kept: true };
+		recordDecision(deps, { by, lane, confidence, kept: true });
 		return keepPrev();
 	}
 	const pick = verdict.action === "keep" ? candidates[0] : verdict.pick;
-	routerStats.lastDecision = { ts: now, by, lane, confidence, kept: false };
+	recordDecision(deps, { by, lane, confidence, kept: false });
 	const nextState: RouterState = {
 		lane,
 		lastPhysical: pick,
@@ -346,7 +362,24 @@ export function registerRouter(pi: ExtensionAPI, deps: { config: () => Switchman
 				classify: (model: unknown, context: RouterClassifierContext, options?: { signal?: AbortSignal }) =>
 					ctx.modelRegistry.classify(model as never, context as never, options as never),
 			};
-			return routeCore({ config: deps.config, registry }, request as unknown as RouteRequestLike).then((outcome) => {
+			return routeCore(
+				{
+					config: deps.config,
+					registry,
+					onDecision: (d) => {
+						// Live footer status right under the model line: lane + the
+						// decision model's confidence (and who decided).
+						try {
+							const who = d.by === "classifier" ? "d" : "r"; // d = decision model, r = rules
+							const text = `sw ${d.lane} ${d.confidence.toFixed(2)} ${who}${d.kept ? " kept" : ""}`;
+							(ctx as { ui?: { setStatus?: (k: string, t: string | undefined) => void } }).ui?.setStatus?.("switchman", text);
+						} catch {
+							/* footer status is advisory */
+						}
+					},
+				},
+				request as unknown as RouteRequestLike,
+			).then((outcome) => {
 				const model = ctx.modelRegistry.find(outcome.ref.provider, outcome.ref.model);
 				if (model !== undefined) return { model, thinkingLevel: outcome.thinking as never, state: outcome.state };
 				const previous = (request as unknown as RouteRequestLike).previous?.model;

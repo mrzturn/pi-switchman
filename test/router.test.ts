@@ -91,6 +91,29 @@ test("direct rides the economy lane", async () => {
 	assert.equal(outcome.ref.model, "model-flash");
 });
 
+test("onDecision fires for gate, keep, and switch decisions (footer confidence)", async () => {
+	const seen: { by: string; lane: string; confidence: number; kept: boolean }[] = [];
+	const deps = {
+		config: () => CONFIG,
+		registry: fakeRegistry(),
+		onDecision: (d: { by: string; lane: string; confidence: number; kept: boolean }) => seen.push(d),
+	};
+	// gate: image request records the vision-gate decision
+	const imageRequest = request({ reason: "direct" }) as { messages: { role: string; content: unknown }[] };
+	imageRequest.messages = [
+		...imageRequest.messages.slice(0, -1),
+		{ role: "user", content: [{ type: "text", text: "look" }, { type: "image", mimeType: "image/png", data: "x" }] },
+	];
+	await routeCore(deps, imageRequest as never);
+	assert.ok(seen.some((d) => d.lane === "vision" && d.by === "builtin" && d.confidence === 1));
+	// plain decision records lane + confidence
+	seen.length = 0;
+	await routeCore(deps, request({ reason: "direct" }));
+	assert.equal(seen.length, 1);
+	assert.equal(seen[0].lane, "economy");
+	assert.ok(seen[0].confidence >= 0);
+});
+
 test("user + classifier decision: high confidence switches to lane head and records state", async () => {
 	const registry = fakeRegistry({
 		classifyResult: { stopReason: "stop", answers: { lane: { type: "choice", choice: "main", confidence: 0.95 } } },
