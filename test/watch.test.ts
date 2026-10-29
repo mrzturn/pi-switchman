@@ -72,7 +72,7 @@ test("TmuxWatch: window is created AND selected; splits tile; detach lingers, ki
 	// subsequent: split into the same window + tiled layout
 	assert.equal(calls[3][0], "split-window");
 	assert.equal(calls[3][3], "@9");
-	assert.deepEqual(calls[5], ["select-layout", "-t", "@9", "tiled"]);
+	assert.deepEqual(calls[4], ["select-layout", "-t", "@9", "tiled"]);
 	// detach: pane killed per agent; window dies with the last, focus restored
 	watch.detach("%5");
 	watch.detach("%6");
