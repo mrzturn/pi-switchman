@@ -1,8 +1,10 @@
 /** Agent work visibility: every run/parallel subagent gets a human-readable
- *  log file under the switchman store. Inside tmux, each agent opens a split
- *  pane tailing its log (tiled window `switchman-agents`); outside tmux the
- *  `/switchman-agents` command lists and tails the same files. All tmux
- *  interaction fails open — a broken tmux never breaks a dispatch. */
+ *  log file under the switchman store. Inside tmux, each agent opens a pane
+ *  tailing its log in a dedicated `switchman-agents` window — the window is
+ *  SELECTED on first attach so the user actually sees the split live, and
+ *  focus returns to the origin window when the last pane closes. Finished
+ *  panes linger briefly so the exit line is readable. All tmux interaction
+ *  fails open — a broken tmux never breaks a dispatch. */
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -11,6 +13,7 @@ import type { Message } from "@earendil-works/pi-agent-core";
 
 const TMUX_WINDOW = "switchman-agents";
 const SNIPPET = 200;
+const DETACH_LINGER_MS = 4000;
 
 /** One human-readable line for a child stream message (pure). */
 export function formatChildMessage(message: Message): string | null {
@@ -73,45 +76,73 @@ export function tailAgentLog(path: string, lines = 60): string {
 	}
 }
 
-/** Live tmux pane watching. One `switchman-agents` window, tiled panes. */
-export class TmuxWatch {
-	private paneCount = 0;
-	private readonly tmux: string | null;
+/** Injectable tmux runner (tests capture sequences; default spawnSync). */
+export type TmuxRunner = (binary: string, args: string[]) => { status: number | null; stdout: string; stderr: string };
 
-	constructor(tmuxEnv?: string, tmuxBinary = "tmux") {
+const spawnRunner: TmuxRunner = (binary, args) => {
+	const run = spawnSync(binary, args, { encoding: "utf8", timeout: 5000 });
+	return { status: run.status, stdout: run.stdout ?? "", stderr: run.stderr ?? "" };
+};
+
+/** Live tmux panes watching agent logs. One window, tiled panes, focused. */
+export class TmuxWatch {
+	private readonly tmux: string | null;
+	private readonly runner: TmuxRunner;
+	private readonly lingerMs: number;
+	private paneCount = 0;
+	private windowId: string | null = null;
+	private originWindow: string | null = null;
+
+	constructor(tmuxEnv?: string, tmuxBinary = "tmux", runner: TmuxRunner = spawnRunner, lingerMs = DETACH_LINGER_MS) {
 		const env = tmuxEnv !== undefined ? tmuxEnv : process.env.TMUX;
 		this.tmux = env ? tmuxBinary : null;
+		this.runner = runner;
+		this.lingerMs = lingerMs;
 	}
 
 	get active(): boolean {
 		return this.tmux !== null;
 	}
 
-	/** Open a pane tailing the log; null when not in tmux or tmux failed. */
+	/** Open a pane tailing the log; null when not in tmux or tmux failed.
+	 *  The window is selected on first attach so the split is actually
+	 *  visible (creating a background window nobody looks at is useless). */
 	attach(logPath: string): string | null {
 		if (this.tmux === null) return null;
-		const command = `tail -f ${JSON.stringify(logPath)}; echo "[switchman] agent stream ended"`;
+		const command = `tail -n +1 -f ${JSON.stringify(logPath)}; echo "[switchman] agent stream ended"`;
 		try {
+			if (this.originWindow === null) {
+				this.originWindow = this.out("display-message", "-p", "#{window_id}") || null;
+			}
 			let paneId: string;
 			if (this.paneCount === 0) {
-				paneId = this.tmuxOut(
+				this.windowId = this.out(
 					"new-window",
 					"-d",
 					"-n",
 					TMUX_WINDOW,
 					"-P",
 					"-F",
-					"#{pane_id}",
+					"#{window_id}",
 					"bash",
 					"-c",
 					command,
 				);
+				if (this.windowId === "") {
+					this.windowId = null;
+					return null;
+				}
+				// Show the split instead of leaving it in a background tab.
+				this.try("select-window", "-t", this.windowId);
+				// -P -F "#{window_id}" returned the WINDOW id; panes inside it are
+				// addressed by index — pane 0 is the one we just created.
+				paneId = `${this.windowId}.0`;
 			} else {
-				paneId = this.tmuxOut(
+				paneId = this.out(
 					"split-window",
 					"-d",
 					"-t",
-					TMUX_WINDOW,
+					this.windowId ?? TMUX_WINDOW,
 					"-P",
 					"-F",
 					"#{pane_id}",
@@ -119,9 +150,9 @@ export class TmuxWatch {
 					"-c",
 					command,
 				);
-				this.tmuxTry("select-layout", "-t", TMUX_WINDOW, "tiled");
+				if (paneId === "") return null;
+				this.try("select-layout", "-t", this.windowId ?? TMUX_WINDOW, "tiled");
 			}
-			if (paneId === "") return null;
 			this.paneCount++;
 			return paneId;
 		} catch {
@@ -129,31 +160,41 @@ export class TmuxWatch {
 		}
 	}
 
-	/** Close one agent's pane; the window dies with its last pane. */
+	/** Close one agent's pane after a short linger (the exit line stays
+	 *  readable); the window dies with its last pane and focus returns to
+	 *  the window the user came from. */
 	detach(paneId: string | null): void {
 		if (paneId === null || this.tmux === null) return;
-		try {
-			this.tmuxTry("kill-pane", "-t", paneId);
-		} catch {
-			/* pane may already be gone */
-		}
-		this.paneCount = Math.max(0, this.paneCount - 1);
-		if (this.paneCount === 0) {
-			try {
-				this.tmuxTry("kill-window", "-t", TMUX_WINDOW);
-			} catch {
-				/* window may already be gone */
+		const kill = () => {
+			this.try("kill-pane", "-t", paneId);
+			this.paneCount = Math.max(0, this.paneCount - 1);
+			if (this.paneCount === 0) {
+				if (this.originWindow !== null) this.try("select-window", "-t", this.originWindow);
+				if (this.windowId !== null) this.try("kill-window", "-t", this.windowId);
+				this.windowId = null;
 			}
+		};
+		if (this.lingerMs <= 0) kill();
+		else setTimeout(() => {
+			try {
+				kill();
+			} catch {
+				/* pane/window may already be gone */
+			}
+		}, this.lingerMs).unref?.();
+	}
+
+	private out(...args: string[]): string {
+		const run = this.runner(this.tmux as string, args);
+		if (run.status !== 0) throw new Error(run.stderr.trim() || `tmux ${args[0]} failed`);
+		return run.stdout.trim();
+	}
+
+	private try(...args: string[]): void {
+		try {
+			this.runner(this.tmux as string, args);
+		} catch {
+			/* best effort */
 		}
-	}
-
-	private tmuxOut(...args: string[]): string {
-		const run = spawnSync(this.tmux, args, { encoding: "utf8", timeout: 5000 });
-		if (run.status !== 0) throw new Error(run.stderr?.trim() || `tmux ${args[0]} failed`);
-		return (run.stdout ?? "").trim();
-	}
-
-	private tmuxTry(...args: string[]): void {
-		spawnSync(this.tmux, args, { encoding: "utf8", timeout: 5000 });
 	}
 }
