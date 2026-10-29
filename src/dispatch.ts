@@ -197,6 +197,15 @@ async function runJudge(
 	}
 }
 
+/** Shared across dispatch invocations: concurrent dispatch tool calls must
+ *  occupy the same two right-column slots (per-call instances would each
+ *  split the main pane — the four-column bug). */
+let sharedWatch: TmuxWatch | null = null;
+function sharedTmuxWatch(): TmuxWatch {
+	if (sharedWatch === null) sharedWatch = new TmuxWatch();
+	return sharedWatch;
+}
+
 async function runAgent(
 	ctx: ExtensionToolContext,
 	config: SwitchmanConfig,
@@ -366,9 +375,6 @@ export function createDispatchTool(deps: DispatchDeps) {
 				}
 
 				// ---- single-task runner (shared by run + parallel) ----
-				// Live watch: inside tmux each run agent gets a tiled pane tailing
-				// its log; outside, /switchman-agents reads the same files.
-				const watch = new TmuxWatch();
 				const runOne = async (
 					task: { mode: string; steps?: Array<{ tool: string; args?: Record<string, unknown> }>; task?: string; lane?: string; model?: string; system?: string; agent?: string; thinking?: string; cwd?: string },
 				): Promise<{ ok: boolean; text: string; reportPath?: string; model?: string; logPath?: string }> => {
@@ -389,7 +395,7 @@ export function createDispatchTool(deps: DispatchDeps) {
 					}
 					if (task.mode === "run") {
 						if (!task.agent || !task.task) return { ok: false, text: "run requires agent + task" };
-						return await runAgent(ctx, config, deps, { agent: task.agent, task: task.task, model: task.model, thinking: task.thinking, cwd: task.cwd }, signal, undefined, watch);
+						return await runAgent(ctx, config, deps, { agent: task.agent, task: task.task, model: task.model, thinking: task.thinking, cwd: task.cwd }, signal, undefined, sharedTmuxWatch());
 					}
 					return { ok: false, text: `unknown mode "${task.mode}"` };
 				};
