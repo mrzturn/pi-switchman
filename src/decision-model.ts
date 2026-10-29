@@ -5,6 +5,12 @@
  *  fail-open (a broken endpoint never blocks extension load). */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+// Public subpath export of pi-ai: the bundled typesafe-system-one classifier
+// implementation. A config-registered provider must attach implementations for
+// its non-chat models via the `classifiers`/`images` fields — declaring
+// `type: "classifier"` alone makes pi reject calls with "Provider ... does
+// not support classification".
+import { classify as classifySystemOne } from "@earendil-works/pi-ai/api/typesafe-system-one";
 import type { DecisionEndpoint } from "./config.ts";
 
 /** Returns a human-readable validation error, or null when valid. */
@@ -30,6 +36,7 @@ export interface DecisionProviderConfig {
 	name: string;
 	baseUrl: string;
 	apiKey: string;
+	classifiers: { "typesafe-system-one": { classify: typeof classifySystemOne } };
 	models: {
 		type: "classifier";
 		id: string;
@@ -48,6 +55,7 @@ export function buildDecisionProviderConfig(entry: DecisionEndpoint): DecisionPr
 		name: `${entry.provider} (switchman decision)`,
 		baseUrl: normalizeDecisionBaseUrl(entry.baseUrl),
 		apiKey: entry.apiKey !== undefined && entry.apiKey !== "" ? entry.apiKey : "local",
+		classifiers: { "typesafe-system-one": { classify: classifySystemOne } },
 		models: [
 			{
 				type: "classifier",
