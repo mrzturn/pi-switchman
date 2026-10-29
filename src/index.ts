@@ -24,7 +24,7 @@ import { createDispatchTool } from "./dispatch.ts";
 import { registerRouter } from "./router.ts";
 import { registerVisionRelay } from "./vision-relay.ts";
 import { registerDecisionEndpoint } from "./decision-model.ts";
-import { applyWatermark, AUTO_CONTINUE_MESSAGE, COMPACT_COOLDOWN_MS, type WatermarkTier } from "./watermark.ts";
+import { applyWatermark, AUTO_CONTINUE_MESSAGE, COMPACT_COOLDOWN_MS, HANDOVER_TTL_MS, type WatermarkTier } from "./watermark.ts";
 import { LEDGER_RESTORE_TYPE, ledgerRestorePayload, snapshotLedger } from "./ledger.ts";
 import { registerConfigCommand, saveTarget } from "./config-ui.ts";
 import { registerStatusCommand, Stats } from "./status.ts";
@@ -175,6 +175,7 @@ export default function (pi: ExtensionAPI) {
 	// continuation message resumes the task on the compacted context.
 	let forceCompactPending = false;
 	let lastForceCompactAt = 0;
+	let handoverArmedAt: number | null = null;
 	pi.on("agent_end", (_event, ctx) => {
 		if (!forceCompactPending) return;
 		forceCompactPending = false;
@@ -188,22 +189,13 @@ export default function (pi: ExtensionAPI) {
 			} catch {
 				/* advisory */
 			}
+			// Arm the event-driven continuation: pi's TUI host drops
+			// CompactOptions.onComplete/onError (it forwards only
+			// customInstructions), so session_compact below is the single
+			// completion signal — in every host mode.
+			handoverArmedAt = Date.now();
 			ctx.compact({
 				customInstructions: `[SWITCHMAN] Handover compaction at the force watermark. Write the summary as a continuation document: (1) the current task, concrete progress so far, and the immediate next steps; (2) the dispatch ledger below (recent dispatches); (3) the active routing lane. Recent dispatches:\n${ledger}`,
-				onComplete: () => {
-					try {
-						ctx.sendUserMessage(AUTO_CONTINUE_MESSAGE, { deliverAs: "followUp" } as never);
-					} catch {
-						/* fail-open: the human can simply speak */
-					}
-				},
-				onError: (error: Error) => {
-					try {
-						ctx.ui.notify(`switchman: handover compaction failed (${error.message})`, "warning");
-					} catch {
-						/* fail-open */
-					}
-				},
 			});
 		} catch {
 			forceCompactPending = false;
@@ -223,14 +215,39 @@ export default function (pi: ExtensionAPI) {
 			ledgerSnapshot = null;
 		}
 	});
-	pi.on("session_compact", () => {
-		if (ledgerSnapshot === null) return;
-		const summary = ledgerSnapshot;
-		ledgerSnapshot = null;
-		try {
-			pi.appendEntry(LEDGER_RESTORE_TYPE, ledgerRestorePayload(summary));
-		} catch {
-			/* fail-open */
+	pi.on("session_compact", (_event, ctx) => {
+		if (ledgerSnapshot !== null) {
+			const summary = ledgerSnapshot;
+			ledgerSnapshot = null;
+			try {
+				pi.appendEntry(LEDGER_RESTORE_TYPE, ledgerRestorePayload(summary));
+			} catch {
+				/* fail-open */
+			}
+		}
+		// Handover continuation: the compaction triggered at the force
+		// watermark just landed — resume the task on the compacted context.
+		// (pi's TUI host drops CompactOptions.onComplete, so this event is
+		// the completion signal; the TTL guards against stale handovers.)
+		if (handoverArmedAt !== null && Date.now() - handoverArmedAt < HANDOVER_TTL_MS) {
+			handoverArmedAt = null;
+			try {
+				ctx.sendUserMessage(AUTO_CONTINUE_MESSAGE, { deliverAs: "followUp" } as never);
+			} catch {
+				/* fail-open: the human can simply speak */
+			}
+		}
+	});
+	pi.on("session_compact_failed", (_event, ctx) => {
+		// Never leave the handover armed across a failed compaction; the
+		// human can simply speak (or /compact) to resume.
+		if (handoverArmedAt !== null) {
+			handoverArmedAt = null;
+			try {
+				ctx.ui.notify("switchman: handover compaction failed — continuation cancelled", "warning");
+			} catch {
+				/* fail-open */
+			}
 		}
 	});
 

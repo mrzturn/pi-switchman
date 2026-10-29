@@ -43,6 +43,8 @@ export function tierOf(
 }
 
 export const COMPACT_COOLDOWN_MS = 10 * 60 * 1000;
+/** How long an armed handover stays valid for the session_compact continuation. */
+export const HANDOVER_TTL_MS = 10 * 60 * 1000;
 const CONTINUE_COOLDOWN_MS = 60 * 1000;
 
 /** Byte-stable continuation message sent as the user after a force-tier
