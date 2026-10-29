@@ -101,6 +101,7 @@ test("TmuxWatch: background agent finishing just leaves the queue", () => {
 		calls.push(args);
 		if (_b === "tty") return { status: 0, stdout: "/dev/ttysTEST", stderr: "" };
 		if (args[0] === "list-panes" && args[1] === "-a") return { status: 0, stdout: "%0\t/dev/ttysTEST\t@0", stderr: "" };
+		if (args[0] === "list-panes") return { status: 0, stdout: "%0\n%1", stderr: "" };
 		if (args[0] === "split-window") return { status: 0, stdout: "%1", stderr: "" };
 		return { status: 0, stdout: "", stderr: "" };
 	};
