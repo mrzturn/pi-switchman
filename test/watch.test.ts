@@ -83,7 +83,7 @@ test("TmuxWatch: right-column layout, background queue, seamless handoff, fullsc
 	const respawn = calls.find((x) => x[0] === "respawn-pane");
 	assert.ok(respawn, "slot handed off via respawn-pane");
 	assert.equal(respawn?.[3], "%1");
-	assert.ok(respawn?.includes("/tmp/c.log"), "respawn tails the queued agent's log");
+	assert.ok(respawn?.some((x) => x.includes("/tmp/c.log")), "respawn tails the queued agent's log");
 	// c (now displayed) and b finish: no queue — panes linger-close (linger 0 in test)
 	watch.detach(c);
 	watch.detach(b);
