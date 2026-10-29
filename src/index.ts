@@ -24,7 +24,7 @@ import { createDispatchTool } from "./dispatch.ts";
 import { registerRouter } from "./router.ts";
 import { registerVisionRelay } from "./vision-relay.ts";
 import { registerDecisionEndpoint } from "./decision-model.ts";
-import { applyWatermark, AUTO_CONTINUE_MESSAGE, type WatermarkTier } from "./watermark.ts";
+import { applyWatermark, AUTO_CONTINUE_MESSAGE, COMPACT_COOLDOWN_MS, type WatermarkTier } from "./watermark.ts";
 import { LEDGER_RESTORE_TYPE, ledgerRestorePayload, snapshotLedger } from "./ledger.ts";
 import { registerConfigCommand, saveTarget } from "./config-ui.ts";
 import { registerStatusCommand, Stats } from "./status.ts";
@@ -168,6 +168,48 @@ export default function (pi: ExtensionAPI) {
 
 	// ---- [M4] watermark --------------------------------------------------------
 
+	// Force-tier handover compaction. The watermark raises the flag mid-run
+	// (never compacts there — compact() aborts a live run); this handler runs
+	// once the agent settles, when compacting aborts nothing. The compaction
+	// summary IS the handover document (task state + ledger + lane), and the
+	// continuation message resumes the task on the compacted context.
+	let forceCompactPending = false;
+	let lastForceCompactAt = 0;
+	pi.on("agent_end", (_event, ctx) => {
+		if (!forceCompactPending) return;
+		forceCompactPending = false;
+		try {
+			if (Date.now() - lastForceCompactAt < COMPACT_COOLDOWN_MS) return;
+			if (configFor(ctx.cwd).config.disabled) return;
+			lastForceCompactAt = Date.now();
+			let ledger = "(none)";
+			try {
+				ledger = snapshotLedger(ctx.sessionManager.getBranch()) ?? "(none)";
+			} catch {
+				/* advisory */
+			}
+			ctx.compact({
+				customInstructions: `[SWITCHMAN] Handover compaction at the force watermark. Write the summary as a continuation document: (1) the current task, concrete progress so far, and the immediate next steps; (2) the dispatch ledger below (recent dispatches); (3) the active routing lane. Recent dispatches:\n${ledger}`,
+				onComplete: () => {
+					try {
+						ctx.sendUserMessage(AUTO_CONTINUE_MESSAGE, { deliverAs: "followUp" } as never);
+					} catch {
+						/* fail-open: the human can simply speak */
+					}
+				},
+				onError: (error: Error) => {
+					try {
+						ctx.ui.notify(`switchman: handover compaction failed (${error.message})`, "warning");
+					} catch {
+						/* fail-open */
+					}
+				},
+			});
+		} catch {
+			forceCompactPending = false;
+		}
+	});
+
 	// Ledger survival across pi's automatic compactions: snapshot at
 	// session_before_compact (branch still intact), deterministically restore
 	// as a custom entry once session_compact lands. Replaces the old mid-run
@@ -204,6 +246,9 @@ export default function (pi: ExtensionAPI) {
 		setThresholdScale: setCompressionThresholdScale,
 		onTier: (tier) => {
 			watermarkTier = tier;
+		},
+			requestCompact: () => {
+			forceCompactPending = true;
 		},
 		afterCompact: (ctx) => {
 			// Auto-continue: queue a user turn right after a compaction that killed

@@ -117,13 +117,14 @@ test("watermark: force tier never compacts mid-run (pi's own compaction owns it)
 	} as never;
 	let scales: number[] = [];
 	let compacted = 0;
+	let compactCalls = 0;
 	const ctx = {
 		hasUI: true,
 		getContextUsage: () => ({ percent: 96, tokens: 960_000, contextWindow: 1_000_000 }),
 		// compact() aborts a live agent run first — the historical "This operation
 		// was aborted" dead turns were self-inflicted by calling it from turn_end.
 		compact: () => {
-			compacted++;
+			compactCalls++;
 		},
 		sessionManager: {},
 		registerStatusItem: () => {},
@@ -139,10 +140,14 @@ test("watermark: force tier never compacts mid-run (pi's own compaction owns it)
 		setThresholdScale: (scale) => scales.push(scale),
 		onTier: () => {},
 		afterCompact: () => {},
+		requestCompact: () => {
+			compacted++; // reuse counter: the flag path is the compact trigger
+		},
 	});
 	const turnEnd = handlers.get("turn_end") ?? [];
 	await turnEnd[0]({ message: { stopReason: "toolUse" } }, ctx); // normal turn crossing force tier
-	assert.equal(compacted, 0, "turn_end must never call ctx.compact — it aborts the live run");
+	assert.equal(compacted, 1, "force tier raises the handover-compaction flag (executed at agent_end, never here)");
+	assert.equal(compactCalls, 0, "turn_end must never call ctx.compact — it aborts the live run");
 	assert.ok(scales.includes(DEFAULT_CONFIG.compress.hardRatio)); // fuse tightened
 });
 

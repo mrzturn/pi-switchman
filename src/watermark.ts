@@ -42,7 +42,7 @@ export function tierOf(
 	return "ok";
 }
 
-const COMPACT_COOLDOWN_MS = 10 * 60 * 1000;
+export const COMPACT_COOLDOWN_MS = 10 * 60 * 1000;
 const CONTINUE_COOLDOWN_MS = 60 * 1000;
 
 /** Byte-stable continuation message sent as the user after a force-tier
@@ -58,6 +58,9 @@ export interface WatermarkDeps {
 	onTier?: (tier: WatermarkTier) => void;
 	/** Fired right after a force-tier compaction is triggered (auto-continue). */
 	afterCompact?: (ctx: ExtensionContext) => void;
+	/** Fired when the force tier is crossed: index queues a handover
+	 *  compaction for the moment the agent run settles (never mid-run). */
+	requestCompact?: () => void;
 }
 
 export function applyWatermark(pi: ExtensionAPI, deps: WatermarkDeps): void {
@@ -107,12 +110,13 @@ export function applyWatermark(pi: ExtensionAPI, deps: WatermarkDeps): void {
 					notify(ctx, `switchman: hard tier (${Math.round(usage.percent)}%) — read compression tightened`, "warning");
 				} else if (tier === "force" && Date.now() - lastCompactAt > COMPACT_COOLDOWN_MS) {
 					lastCompactAt = Date.now();
-					// NEVER ctx.compact() here: turn_end always fires inside a live agent
-					// run, and compact() aborts the agent first — the "This operation was
-					// aborted" dead turns were self-inflicted by exactly this call. pi's own
-					// threshold/overflow compaction runs at a safe point instead, and the
-					// ledger survives via the session_before_compact/session_compact pair.
-					notify(ctx, `switchman: force tier (${Math.round(usage.percent)}%) — pi will auto-compact; ledger restore armed`, "warning");
+					// NEVER ctx.compact() here: turn_end fires inside a live run and
+					// compact() aborts the agent first (the historical dead turns were
+					// exactly this). Instead raise the flag; the agent_end handler in
+					// index.ts performs the handover compaction once the run settles —
+					// compacting while idle aborts nothing — and continues the task.
+					deps.requestCompact?.();
+					notify(ctx, `switchman: force tier (${Math.round(usage.percent)}%) — handover compaction queued for turn end`, "warning");
 				}
 			}
 			lastTier = tier;
