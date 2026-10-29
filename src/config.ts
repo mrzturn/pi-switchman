@@ -103,7 +103,7 @@ export const DEFAULT_CONFIG: SwitchmanConfig = {
 		genericTail: 10,
 		hardRatio: 0.4,
 	},
-	watermark: { soft: 0.7, hard: 0.85, force: 0.95 },
+	watermark: { soft: 70, hard: 85, force: 95 },
 	anchors: [],
 	router: {
 		enabled: true,

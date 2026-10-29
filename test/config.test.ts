@@ -26,16 +26,16 @@ test("global overrides defaults, project overrides global", () => {
 	assert.equal(merged1.compress.readTail, DEFAULT_CONFIG.compress.readTail); // untouched
 	assert.equal(merged1.watermark.soft, DEFAULT_CONFIG.watermark.soft);
 
-	const merged2 = mergeConfig(merged1, { compress: { threshold: 99 }, watermark: { soft: 0.5 } });
+	const merged2 = mergeConfig(merged1, { compress: { threshold: 99 }, watermark: { soft: 50 } });
 	assert.equal(merged2.compress.threshold, 99);
 	assert.equal(merged2.compress.readHead, 30); // global layer survives
-	assert.equal(merged2.watermark.soft, 0.5);
+	assert.equal(merged2.watermark.soft, 50);
 });
 
 test("invalid values fall back to the layer below (fail-open)", () => {
 	const merged = mergeConfig(DEFAULT_CONFIG, {
 		compress: { threshold: -5, readHead: "many", enabled: "yes", hardRatio: 2 },
-		watermark: { soft: 0, hard: 1.5, force: null },
+		watermark: { soft: 0, hard: 150, force: null },
 		disabled: 1,
 	});
 	assert.equal(merged.compress.threshold, DEFAULT_CONFIG.compress.threshold);

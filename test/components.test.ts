@@ -61,12 +61,12 @@ test("finalOutput extracts the last assistant text", () => {
 
 // ---- watermark tier --------------------------------------------------------------
 
-test("tierOf thresholds", () => {
+test("tierOf thresholds (percent is 0-100: pi returns (tokens/window)*100)", () => {
 	const watermark = DEFAULT_CONFIG.watermark;
-	assert.equal(tierOf(0.5, watermark), "ok");
-	assert.equal(tierOf(0.71, watermark), "soft");
-	assert.equal(tierOf(0.86, watermark), "hard");
-	assert.equal(tierOf(0.96, watermark), "force");
+	assert.equal(tierOf(50, watermark), "ok");
+	assert.equal(tierOf(71, watermark), "soft");
+	assert.equal(tierOf(86, watermark), "hard");
+	assert.equal(tierOf(96, watermark), "force");
 });
 
 // ---- config schema + round-trip ---------------------------------------------------
