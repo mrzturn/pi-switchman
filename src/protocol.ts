@@ -7,6 +7,23 @@
 
 export const PROTOCOL_SECTION_KEY = "switchman";
 
+/** Separate key so toggling the annotation convention never disturbs the bytes
+ *  of the main doctrine section (and vice versa) — each is its own cache prefix
+ *  segment. */
+export const ANNOTATE_SECTION_KEY = "switchman-annotate";
+
+/** The dsh-switchman comment convention: bracketed three-part annotations.
+ *  Byte-stable, pure function of nothing — the rule text never varies. */
+export function annotateText(): string {
+	return [
+		"[SWITCHMAN:ANNOTATE] Comment convention.",
+		"- When you add or meaningfully change a comment (in code or docs), write it in the three-part bracket form: [<YYYY-MM-DD>]-[<what changed and why>]-[<what it aligns with or satisfies>].",
+		"- Example: // [2026-10-29]-[clamp retry backoff so parallel storms cannot hammer a failing lane]-[implements dispatch hardening]",
+		"- Use the host language's comment syntax (//, #, <!-- -->, ...); keep each annotation on one line.",
+		"- Skip the form for trivial comments (TODO/FIXME markers, license headers) and for text the user asked to be verbatim; an evident project-wide comment style takes precedence.",
+	].join("\n");
+}
+
 export function protocolText(options: { compressEnabled: boolean; dispatchEnabled: boolean }): string {
 	const lines = ["[SWITCHMAN:DOCTRINE] Context economics layer active."];
 	if (options.compressEnabled) {

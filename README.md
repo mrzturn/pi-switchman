@@ -16,6 +16,7 @@
 | **[D] 能力知识层** | 候选集活目录现查；锚点 > 名字/价格启发式推断 > 目录顺序；泳道未配置自动排序 |
 | **[E] 水位** | 每档双形态阈值：百分比（0–100）或绝对 token（如 tokens: 80000），两者同配时按实际窗口换算取小者生效；soft→引导派发 / hard→压缩收紧 / force→提示 pi 自动压缩（单压缩者原则；台账经 session_before_compact 快照、session_compact 后确定性还原）；死回合（stopReason=error）自动接续 |
 | **[F] TUI 配置** | `/switchman-config`：泳道×有序模型表（↑↓调序）、决策模型选择、即存即生效；JSON 文件永远可手改 |
+| **[G] 注释规范注入** | 初始 prompt 要求模型写注释（代码/文档）时用 dsh 式三段括号形式 `[YYYY-MM-DD]-[改动与理由]-[对齐关系]`；独立协议段（字节稳定，开关切换不扰动主段缓存前缀）；`"annotate": false` 关闭 |
 
 出厂 agents：`scout`（侦查）/ `reviewer`（独立复审）/ `tester`（测试分诊）/ `worker`（通用实现）。
 

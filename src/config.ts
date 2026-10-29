@@ -96,6 +96,8 @@ export interface SwitchmanConfig {
 	enforce: "advice" | "enforce";
 	compress: CompressConfig;
 	watermark: WatermarkConfig;
+	/** Comment-convention injection ([]-[]-[] bracket annotations). */
+	annotate: { enabled: boolean };
 	anchors: Anchor[];
 	router: RouterConfig;
 }
@@ -113,6 +115,7 @@ export const DEFAULT_CONFIG: SwitchmanConfig = {
 		hardRatio: 0.4,
 	},
 	watermark: { soft: { percent: 70 }, hard: { percent: 85 }, force: { percent: 95 } },
+	annotate: { enabled: true },
 	anchors: [],
 	router: {
 		enabled: true,
@@ -192,6 +195,7 @@ export function mergeConfig(base: SwitchmanConfig, override: Record<string, unkn
 		enforce: override.enforce === "enforce" ? "enforce" : override.enforce === "advice" ? "advice" : base.enforce,
 		compress: { ...base.compress },
 		watermark: { ...base.watermark },
+		annotate: { ...base.annotate },
 		anchors: base.anchors,
 		router: { ...base.router, lanes: { ...base.router.lanes } },
 	};
@@ -235,6 +239,10 @@ export function mergeConfig(base: SwitchmanConfig, override: Record<string, unkn
 			hard: threshold(watermark.hard, base.watermark.hard),
 			force: threshold(watermark.force, base.watermark.force),
 		};
+	}
+	if (override.annotate !== undefined) {
+		// fail-open: only a strict boolean is honored; anything else inherits
+		out.annotate = typeof override.annotate === "boolean" ? { enabled: override.annotate } : base.annotate;
 	}
 
 	if (Array.isArray(override.anchors)) {

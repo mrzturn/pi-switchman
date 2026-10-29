@@ -8,6 +8,7 @@ import test from "node:test";
 import { DEFAULT_CONFIG, mergeConfig, readRawConfig, writeRawConfig } from "../src/config.ts";
 import { currentPhysicalModel, ledgerFromBranch, ledgerSummary } from "../src/ledger.ts";
 import { childEnv, finalOutput, parseChildLine } from "../src/child.ts";
+import { annotateText } from "../src/protocol.ts";
 import { discoverAgents } from "../src/agents.ts";
 import { filterModels, laneRows, mainRows } from "../src/config-ui.ts";
 import { tierOf } from "../src/watermark.ts";
@@ -171,4 +172,13 @@ test("childEnv strips tmux context so nested dispatches never open watch panes",
 		delete process.env.TMUX;
 		delete process.env.TMUX_PANE;
 	}
+});
+
+
+test("annotateText: stable three-part bracket convention, pure function", () => {
+	const a = annotateText();
+	assert.equal(a, annotateText()); // byte-stable across calls
+	assert.ok(a.startsWith("[SWITCHMAN:ANNOTATE]"));
+	assert.ok(a.includes("[<YYYY-MM-DD>]-[<what changed and why>]-[<what it aligns with or satisfies>]"));
+	assert.ok(!/[\u4e00-\u9fff]/.test(a)); // English-only protocol text
 });

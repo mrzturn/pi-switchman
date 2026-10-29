@@ -42,6 +42,7 @@ test("invalid values fall back to the layer below (fail-open)", () => {
 	const merged = mergeConfig(DEFAULT_CONFIG, {
 		compress: { threshold: -5, readHead: "many", enabled: "yes", hardRatio: 2 },
 		watermark: { soft: 0, hard: { percent: 150, tokens: -5}, force: null },
+		annotate: "yes",
 		disabled: 1,
 	});
 	assert.equal(merged.compress.threshold, DEFAULT_CONFIG.compress.threshold);
@@ -51,6 +52,13 @@ test("invalid values fall back to the layer below (fail-open)", () => {
 	assert.deepEqual(merged.watermark.soft, DEFAULT_CONFIG.watermark.soft);
 	assert.deepEqual(merged.watermark.hard, DEFAULT_CONFIG.watermark.hard);
 	assert.equal(merged.disabled, DEFAULT_CONFIG.disabled);
+	// annotate: invalid value inherits the layer below; strict booleans win;
+	// project layer overrides the global layer per key
+	assert.equal(merged.annotate.enabled, DEFAULT_CONFIG.annotate.enabled);
+	const off = mergeConfig(DEFAULT_CONFIG, { annotate: false });
+	assert.equal(off.annotate.enabled, false);
+	const layeredOff = mergeConfig(mergeConfig(DEFAULT_CONFIG, { annotate: true }), { annotate: false });
+	assert.equal(layeredOff.annotate.enabled, false);
 });
 
 test("malformed JSON records an error and keeps defaults", () => {

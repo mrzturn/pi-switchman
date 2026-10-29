@@ -66,6 +66,12 @@ test("M0+M1 wiring smoke: section, compression, expand, status", async () => {
 		await fire(recorded, "before_agent_start", { systemPromptOptions: { cwd: dir, sections: sections2 } }, ctxIn(dir));
 		assert.ok(sections1.switchman?.includes("[SWITCHMAN:DOCTRINE]"));
 		assert.equal(sections1.switchman, sections2.switchman);
+		// annotate section: on by default, byte-stable across runs, and its
+		// bytes live in their own key so toggling never perturbs the doctrine
+		// section's cache prefix
+		assert.ok(sections1["switchman-annotate"]?.includes("[SWITCHMAN:ANNOTATE]"));
+		assert.ok(sections1["switchman-annotate"]?.includes("[<YYYY-MM-DD>]-[<what changed and why>]-[<what it aligns with or satisfies>]"));
+		assert.equal(sections1["switchman-annotate"], sections2["switchman-annotate"]);
 
 		// M1: oversized result distilled, footer names a readable store path
 		const big = Array.from({ length: 500 }, (_, i) => `row ${i + 1} ${"payload ".repeat(20)}`).join("\n");

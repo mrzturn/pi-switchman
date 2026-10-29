@@ -18,7 +18,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { ConfigStore, writeRawConfig, type LoadedConfig, type SwitchmanConfig } from "./config.ts";
 import { OutputStore, distillText, storeFooter, textOf, type ContentBlock } from "./compress.ts";
-import { PROTOCOL_SECTION_KEY, protocolText } from "./protocol.ts";
+import { ANNOTATE_SECTION_KEY, PROTOCOL_SECTION_KEY, annotateText, protocolText } from "./protocol.ts";
 import { createExpandTool } from "./expand.ts";
 import { createDispatchTool } from "./dispatch.ts";
 import { registerRouter } from "./router.ts";
@@ -81,6 +81,13 @@ export default function (pi: ExtensionAPI) {
 				compressEnabled: cfg.compress.enabled,
 				dispatchEnabled: !cfg.disabled,
 			});
+			// Comment-convention section (dsh-switchman's []-[]-[] form); set or
+			// cleared every run so a mid-session toggle takes effect immediately.
+			if (cfg.annotate.enabled) {
+				event.systemPromptOptions.sections[ANNOTATE_SECTION_KEY] = annotateText();
+			} else {
+				delete event.systemPromptOptions.sections[ANNOTATE_SECTION_KEY];
+			}
 			protocolSeen = true;
 		} catch {
 			/* fail-open: no section */
