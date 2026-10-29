@@ -12,11 +12,12 @@
  *  flags; all hook paths fail open; tool declarations never change
  *  mid-session; model switches happen only at user boundaries. */
 
+import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { ConfigStore, writeRawConfig, type LoadedConfig, type SwitchmanConfig } from "./config.ts";
+import { ConfigStore, readRawConfig, writeRawConfig, type LoadedConfig, type SwitchmanConfig } from "./config.ts";
 import { OutputStore, distillText, storeFooter, textOf, type ContentBlock } from "./compress.ts";
 import { ANNOTATE_SECTION_KEY, PROTOCOL_SECTION_KEY, annotateText, protocolText } from "./protocol.ts";
 import { createExpandTool } from "./expand.ts";
@@ -285,6 +286,47 @@ export default function (pi: ExtensionAPI) {
 				/* fail-open */
 			}
 		},
+	});
+
+	// ---- language ask-once (dsh's three questions) ------------------------------
+
+	// First interactive session in an unconfigured project: ask conversation-
+	// adjacent language preferences ONCE (default / commit / docs), persist to
+	// the project switchman.json, never block or repeat within a session. All
+	// failure paths fail open — skills fall back to the conversation language.
+	let langAsked = false;
+	pi.on("session_start", async (_event, ctx) => {
+		if (langAsked) return;
+		langAsked = true;
+		try {
+			if (ctx.mode !== "tui") return;
+			if (configFor(ctx.cwd).config.disabled) return;
+			const paths = configPaths(ctx.cwd);
+			const hasLang = (raw: Record<string, unknown>): boolean => {
+				const skills = raw.skills;
+				return skills !== null && typeof skills === "object" && typeof (skills as Record<string, unknown>).language === "object" &&
+					(skills as Record<string, unknown>).language !== null;
+			};
+			if (hasLang(readRawConfig(paths.globalPath)) || hasLang(readRawConfig(paths.projectPath))) return;
+			const ask = async (title: string): Promise<string | undefined> => {
+				const answer = await ctx.ui.input(title, "zh-CN / en / ja / …（回车跳过 = 跟随对话语言）", {});
+				const trimmed = typeof answer === "string" ? answer.trim().slice(0, 48) : "";
+				return trimmed === "" ? undefined : trimmed;
+			};
+			const def = await ask("技能与产出的默认语言？（skills.language.default）");
+			const commit = await ask("提交信息的语言？（skills.language.commit）");
+			const docs = await ask("生成文档的语言？（skills.language.docs）");
+			if (def === undefined && commit === undefined && docs === undefined) return;
+			mkdirSync(dirname(paths.projectPath), { recursive: true });
+			const language: Record<string, string> = {};
+			if (def !== undefined) language.default = def;
+			if (commit !== undefined) language.commit = commit;
+			if (docs !== undefined) language.docs = docs;
+			writeRawConfig(paths.projectPath, { skills: { language } });
+			ctx.ui.notify(`已写入 ${paths.projectPath} 的 skills.language`, "info");
+		} catch {
+			/* fail-open: skills fall back to the conversation language */
+		}
 	});
 
 	// ---- [F] config TUI + status ----------------------------------------------

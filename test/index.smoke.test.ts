@@ -3,11 +3,12 @@
  *  status command. This is the "mock 挂载冒烟" layer of DESIGN.md §9. */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import factory from "../src/index.ts";
+import { writeRawConfig } from "../src/config.ts";
 
 interface Recorded {
 	events: Map<string, Array<(event: unknown, ctx: unknown) => unknown>>;
@@ -119,6 +120,80 @@ test("M0+M1 wiring smoke: section, compression, expand, status", async () => {
 		await recorded.commands.get("switchman-status")!.handler("", statusCtx);
 		assert.equal(statusCtx.ui.notifications.length, 1);
 		assert.match(statusCtx.ui.notifications[0], /1 compressed/);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+
+test("language ask-once: three questions in unconfigured tui projects, persisted to project config", async () => {
+	const { pi, recorded } = fakePi();
+	factory(pi as never);
+	const dir = mkdtempSync(join(tmpdir(), "sw-ask-"));
+	try {
+		const answers = ["zh-CN", "en", "zh-CN"];
+		let asked = 0;
+		const uiCtx = {
+			cwd: dir,
+			mode: "tui",
+			ui: {
+				input: async (_title: string, _placeholder: string) => {
+					asked++;
+					return answers[asked - 1];
+				},
+				notify: () => {},
+			},
+		};
+		await fire(recorded, "session_start", {}, uiCtx);
+		assert.equal(asked, 3);
+		const written = JSON.parse(readFileSync(join(dir, ".pi", "switchman.json"), "utf8"));
+		assert.deepEqual(written.skills.language, { default: "zh-CN", commit: "en", docs: "zh-CN" });
+
+		// latch: a second session_start in the same process never asks again
+		await fire(recorded, "session_start", {}, uiCtx);
+		assert.equal(asked, 3);
+
+		// configured projects are not asked (global layer counts too)
+		writeRawConfig(join(dir, ".pi", "switchman.json"), { skills: { language: { default: "de" } } });
+		let askedAgain = 0;
+		const fresh = fakePi();
+		factory(fresh.pi as never);
+		const uiCtx2 = {
+			cwd: dir,
+			mode: "tui",
+			ui: { input: async () => { askedAgain++; return "x"; }, notify: () => {} },
+		};
+		await fire(fresh.recorded, "session_start", {}, uiCtx2);
+		assert.equal(askedAgain, 0);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("language ask-once: skips and non-tui modes never write", async () => {
+	const { pi, recorded } = fakePi();
+	factory(pi as never);
+	const dir = mkdtempSync(join(tmpdir(), "sw-ask2-"));
+	try {
+		// user skips everything: no file, no ask on the next event
+		let asked = 0;
+		const skipCtx = {
+			cwd: dir,
+			mode: "tui",
+			ui: { input: async () => { asked++; return ""; }, notify: () => {} },
+		};
+		await fire(recorded, "session_start", {}, skipCtx);
+		assert.equal(asked, 3);
+		assert.equal(existsSync(join(dir, ".pi", "switchman.json")), false);
+
+		// non-tui (print/rpc) is never asked
+		let askedTui = 0;
+		await fire(recorded, "session_start", {}, {
+			cwd: join(dir, "elsewhere"),
+			mode: "print",
+			ui: { input: async () => { askedTui++; return "x"; }, notify: () => {} },
+		});
+		assert.equal(askedTui, 0);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

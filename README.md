@@ -20,7 +20,7 @@
 
 出厂 agents：`scout`（侦查）/ `reviewer`（独立复审）/ `tester`（测试分诊）/ `worker`（通用实现）。
 
-内置 skills（随包安装自动发现，`/skill:<name>` 显式调用）：`git-commit-message`（只产出提交文案，不碰 git 写操作）/ `db-query`（MySQL/Redis 只读核查，自带加固过的查询脚本）/ `requirement-docs`（带证据链的需求/设计/计划文档）。输出语言遵循 `switchman.json` 的 `skills.language`（`default` + 按类别 `commit`/`docs`/`db` 覆盖，项目层覆盖全局层），当场指令的语言优先级最高；机器标记与协议文本保持英文稳定。
+内置 skills（随包安装自动发现，`/skill:<name>` 显式调用）：`git-commit-message`（只产出提交文案，不碰 git 写操作）/ `db-query`（MySQL/Redis 只读核查，自带加固过的查询脚本）/ `requirement-docs`（带证据链的需求/设计/计划文档）。输出语言遵循 `switchman.json` 的 `skills.language`（`default` + 按类别 `commit`/`docs`/`db` 覆盖，项目层覆盖全局层），当场指令的语言优先级最高；机器标记与协议文本保持英文稳定。首次在未配置的 TUI 项目里启动会**一次性询问三个语言问题**（默认产出 / 提交信息 / 生成文档），答完写入项目 `.pi/switchman.json`，跳过则跟随对话语言且本会话不再问。
 
 ## 安装
 
