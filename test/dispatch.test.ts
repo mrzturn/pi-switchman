@@ -81,13 +81,13 @@ test("gather: whitelisted steps run, write tools rejected, summary per step", as
 		mode: "gather",
 		description: "find auth code",
 		steps: [
-			{ tool: "grep", args: { pattern: "auth" } },
+			{ tool: "read", args: { path: "/tmp/auth.ts" } },
 			{ tool: "write", args: { path: "/tmp/x", content: "evil" } },
 		],
 	}, ctx);
 	assert.equal(ctx.executeToolCalls.length, 1); // write never ran
-	assert.equal(ctx.executeToolCalls[0].name, "grep");
-	assert.ok(result.content[0].text.includes("✓ grep"));
+	assert.equal(ctx.executeToolCalls[0].name, "read");
+	assert.ok(result.content[0].text.includes("✓ read"));
 	assert.ok(result.content[0].text.includes("✗ write"));
 	assert.ok(result.content[0].text.includes("not a read-only tool"));
 	// ledger recorded
@@ -171,8 +171,8 @@ test("parallel: mixed tasks capped, per-task sections", async () => {
 	const result = await runDispatch(tool, {
 		mode: "parallel",
 		tasks: [
-			{ mode: "gather", description: "one", steps: [{ tool: "ls", args: {} }] },
-			{ mode: "gather", description: "two", steps: [{ tool: "find", args: {} }] },
+			{ mode: "gather", description: "one", steps: [{ tool: "read", args: { path: "/tmp/a" } }] },
+			{ mode: "gather", description: "two", steps: [{ tool: "read", args: { path: "/tmp/b" } }] },
 		],
 	}, ctx);
 	assert.ok(result.content[0].text.includes("== one ✓"));
@@ -180,7 +180,7 @@ test("parallel: mixed tasks capped, per-task sections", async () => {
 	// too many tasks
 	const tooMany = await runDispatch(tool, {
 		mode: "parallel",
-		tasks: Array.from({ length: 9 }, (_, i) => ({ mode: "gather", steps: [{ tool: "ls" }], description: `t${i}` })),
+		tasks: Array.from({ length: 9 }, (_, i) => ({ mode: "gather", steps: [{ tool: "read" }], description: `t${i}` })),
 	}, ctx);
 	assert.equal(tooMany.isError, true);
 	assert.ok(tooMany.content[0].text.includes("at most 8"));

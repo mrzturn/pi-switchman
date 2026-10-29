@@ -24,7 +24,9 @@ import { findAgent, type AgentScope } from "./agents.ts";
 import type { OutputStore } from "./compress.ts";
 
 /** Read-only tools a gather step may name. */
-const GATHER_WHITELIST = new Set(["read", "grep", "glob", "find", "ls"]);
+// pi registers no standalone ls/glob/find tools (bash covers them); the only
+// read-only tool a nested executeTool can resolve is `read`.
+const GATHER_WHITELIST = new Set(["read"]);
 
 const MAX_PARALLEL_TASKS = 8;
 const PARALLEL_CONCURRENCY = 4;
@@ -280,7 +282,7 @@ async function mapWithConcurrency<TIn, TOut>(
 // ---- tool definition -----------------------------------------------------------
 
 const GatherStep = Type.Object({
-	tool: Type.String({ description: "Read-only tool name: read, grep, glob, find, ls" }),
+	tool: Type.String({ description: "Read-only tool name: read" }),
 	args: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Tool arguments" })),
 });
 
