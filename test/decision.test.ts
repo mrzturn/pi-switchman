@@ -119,7 +119,7 @@ test("watermark: force tier never compacts mid-run (pi's own compaction owns it)
 	let compacted = 0;
 	const ctx = {
 		hasUI: true,
-		getContextUsage: () => ({ percent: 0.96 }),
+		getContextUsage: () => ({ percent: 96 }),
 		// compact() aborts a live agent run first — the historical "This operation
 		// was aborted" dead turns were self-inflicted by calling it from turn_end.
 		compact: () => {
@@ -146,7 +146,7 @@ test("watermark: force tier never compacts mid-run (pi's own compaction owns it)
 	assert.ok(scales.includes(DEFAULT_CONFIG.compress.hardRatio)); // fuse tightened
 });
 
-function watermarkHarness(branch: unknown[], usage = { percent: 0.5 }) {
+function watermarkHarness(branch: unknown[], usage = { percent: 50 }) {
 	const handlers = new Map<string, ((event: unknown, ctx: unknown) => Promise<void>)[]>();
 	const pi = {
 		on: (event: string, handler: (event: unknown, ctx: unknown) => Promise<void>) => {

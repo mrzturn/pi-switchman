@@ -148,6 +148,13 @@ function ratioOr(source: Record<string, unknown>, key: string, fallback: number)
 	return fallback;
 }
 
+function percentOr(source: Record<string, unknown>, key: string, fallback: number): number {
+	const value = source[key];
+	// Watermark thresholds are percentages on pi's getContextUsage scale (0-100).
+	if (typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 100) return value;
+	return fallback;
+}
+
 function modelRefOf(value: unknown): ModelRef | null {
 	if (!isPlainObject(value)) return null;
 	const provider = value.provider;
@@ -192,9 +199,9 @@ export function mergeConfig(base: SwitchmanConfig, override: Record<string, unkn
 	const watermark = override.watermark;
 	if (isPlainObject(watermark)) {
 		out.watermark = {
-			soft: ratioOr(watermark, "soft", base.watermark.soft),
-			hard: ratioOr(watermark, "hard", base.watermark.hard),
-			force: ratioOr(watermark, "force", base.watermark.force),
+			soft: percentOr(watermark, "soft", base.watermark.soft),
+			hard: percentOr(watermark, "hard", base.watermark.hard),
+			force: percentOr(watermark, "force", base.watermark.force),
 		};
 	}
 
