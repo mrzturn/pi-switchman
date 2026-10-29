@@ -88,13 +88,17 @@ const spawnRunner: TmuxRunner = (binary, args) => {
  *  Extra agents run in the background (logs keep writing); when a displayed
  *  agent finishes, the next background agent respawns into its pane — no
  *  layout churn. Killing the last pane restores the main pane to full width
- *  automatically. All tmux interaction fails open. */
+ *  automatically. Every tmux command targets the MAIN WINDOW explicitly —
+ *  tmux commands spawned without an attached client have no reliable
+ *  "current" context (panes land on phantom windows otherwise). All tmux
+ *  interaction fails open. */
 export class TmuxWatch {
 	private readonly tmux: string | null;
 	private readonly runner: TmuxRunner;
 	private readonly lingerMs: number;
 	private readonly maxDisplayed: number;
 	private mainPane: string | null = null;
+	private target: string | null = null; // explicit <window-id> for every command
 	private nextKey = 0;
 	/** Displayed slots: paneId per slot, and which agent key it shows. */
 	private readonly slots: Array<{ paneId: string; key: string } | null> = [];
@@ -131,8 +135,20 @@ export class TmuxWatch {
 		if (this.tmux === null) return null;
 		try {
 			if (this.mainPane === null) {
-				this.mainPane = this.out("display-message", "-p", "#{pane_id}") || null;
-				if (this.mainPane === null) return null;
+				// Resolve OUR pane via the calling TTY (tmux matches the client on
+				// this tty) — never the ambient "current" context, which is not
+				// reliable for commands spawned without an attached client.
+				let tty = "";
+				try {
+					tty = this.out("display-message", "-p", "#{client_name}");
+				} catch {
+					return null; // no client on this tty → we are not really in tmux
+				}
+				if (tty === "") return null;
+				this.mainPane = this.out("display-message", "-p", "-t", tty, "#{pane_id}");
+				if (this.mainPane === "") return null;
+				this.target = this.out("display-message", "-p", "-t", tty, "#{window_id}");
+				if (this.target === "") return null;
 			}
 			const key = `sw-${++this.nextKey}`;
 			this.logPaths.set(key, logPath);
@@ -184,6 +200,10 @@ export class TmuxWatch {
 			);
 		}
 		if (paneId === "") return;
+		// Verify the pane really exists in OUR window before tracking it —
+		// tmux occasionally reports phantom panes when the spawning context
+		// has no attached client.
+		if (!this.paneExists(paneId)) return;
 		this.slots[slot] = { paneId, key };
 	}
 
@@ -233,6 +253,16 @@ export class TmuxWatch {
 		const run = this.runner(this.tmux as string, args);
 		if (run.status !== 0) throw new Error(run.stderr.trim() || `tmux ${args[0]} failed`);
 		return run.stdout.trim();
+	}
+
+	/** Verifies a pane id exists in our tracked window (phantom guard). */
+	private paneExists(paneId: string): boolean {
+		try {
+			const ids = this.out("list-panes", "-t", this.target ?? this.mainPane ?? "", "-F", "#{pane_id}");
+			return ids.split("\n").includes(paneId);
+		} catch {
+			return false;
+		}
 	}
 
 	private try(...args: string[]): void {

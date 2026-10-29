@@ -47,20 +47,19 @@ test("TmuxWatch: corrupted tmux binary fails open (attach null, no throw)", () =
 
 test("TmuxWatch: right-column layout, background queue, seamless handoff, fullscreen restore", () => {
 	const calls: string[][] = [];
-	const out = new Map<string, string>([
-		["display-message", "%0"], // main pane
-		["split-window-h", "%1"], // slot 0 (right column)
-		["split-window-v", "%2"], // slot 1 (stacked)
-	]);
+	const fakePanes = new Set<string>(["%0"]); // main pane
+	let nextPane = 0;
 	const runner: TmuxRunner = (_b, args) => {
 		calls.push(args);
-		const cmd =
-			args[0] === "split-window" && args.includes("-h")
-				? "split-window-h"
-				: args[0] === "split-window" && args.includes("-v")
-					? "split-window-v"
-					: args[0];
-		return { status: 0, stdout: out.get(cmd) ?? "", stderr: "" };
+		if (args[0] === "split-window") {
+			const id = `%${++nextPane}`;
+			fakePanes.add(id);
+			return { status: 0, stdout: id, stderr: "" };
+		}
+		if (args[0] === "list-panes") {
+			return { status: 0, stdout: [...fakePanes].join("\n"), stderr: "" };
+		}
+		return { status: 0, stdout: args[0] === "display-message" ? "%0" : "", stderr: "" };
 	};
 	const watch = new TmuxWatch("in-tmux", "tmux", runner, 0);
 	const a = watch.attach("/tmp/a.log");
