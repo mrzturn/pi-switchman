@@ -308,7 +308,19 @@ export default function (pi: ExtensionAPI) {
 					(skills as Record<string, unknown>).language !== null;
 			};
 			if (hasLang(readRawConfig(paths.globalPath)) || hasLang(readRawConfig(paths.projectPath))) return;
+			// Pick from common languages; the last entry falls through to free
+			// text for anything else. Esc on the selector skips (follow the
+			// conversation language). Labels are stored verbatim — they are
+			// model-facing tags, not BCP-47 codes.
+			const OTHER = "其他…（手动输入）";
+			const COMMON: readonly string[] = [
+				"简体中文", "繁體中文", "English", "日本語", "한국어", "Français",
+				"Deutsch", "Español", "Português", "Italiano", "Русский", "العربية",
+			];
 			const ask = async (title: string): Promise<string | undefined> => {
+				const choice = await ctx.ui.select(title, [...COMMON, OTHER]);
+				if (choice === undefined || choice === "") return undefined;
+				if (choice !== OTHER) return choice;
 				const answer = await ctx.ui.input(title, "zh-CN / en / ja / …（回车跳过 = 跟随对话语言）", {});
 				const trimmed = typeof answer === "string" ? answer.trim().slice(0, 48) : "";
 				return trimmed === "" ? undefined : trimmed;

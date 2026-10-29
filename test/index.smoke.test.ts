@@ -131,27 +131,34 @@ test("language ask-once: three questions in unconfigured tui projects, persisted
 	factory(pi as never);
 	const dir = mkdtempSync(join(tmpdir(), "sw-ask-"));
 	try {
-		const answers = ["zh-CN", "en", "zh-CN"];
-		let asked = 0;
+		let selects = 0;
+		let inputs = 0;
 		const uiCtx = {
 			cwd: dir,
 			mode: "tui",
 			ui: {
-				input: async (_title: string, _placeholder: string) => {
-					asked++;
-					return answers[asked - 1];
+				// default: pick a common language; commit: "other" -> typed; docs: pick common
+				select: async (_title: string, options: string[]) => {
+					selects++;
+					assert.ok(options[options.length - 1].includes("其他"), "last option must be the other/输入 escape hatch");
+					return selects === 2 ? options[options.length - 1] : "简体中文";
+				},
+				input: async () => {
+					inputs++;
+					return "中文+English 混合";
 				},
 				notify: () => {},
 			},
 		};
 		await fire(recorded, "session_start", {}, uiCtx);
-		assert.equal(asked, 3);
+		assert.equal(selects, 3);
+		assert.equal(inputs, 1); // only the "other" path opened the text input
 		const written = JSON.parse(readFileSync(join(dir, ".pi", "switchman.json"), "utf8"));
-		assert.deepEqual(written.skills.language, { default: "zh-CN", commit: "en", docs: "zh-CN" });
+		assert.deepEqual(written.skills.language, { default: "简体中文", commit: "中文+English 混合", docs: "简体中文" });
 
 		// latch: a second session_start in the same process never asks again
 		await fire(recorded, "session_start", {}, uiCtx);
-		assert.equal(asked, 3);
+		assert.equal(selects, 3);
 
 		// configured projects are not asked (global layer counts too)
 		writeRawConfig(join(dir, ".pi", "switchman.json"), { skills: { language: { default: "de" } } });
@@ -161,7 +168,7 @@ test("language ask-once: three questions in unconfigured tui projects, persisted
 		const uiCtx2 = {
 			cwd: dir,
 			mode: "tui",
-			ui: { input: async () => { askedAgain++; return "x"; }, notify: () => {} },
+			ui: { select: async () => { askedAgain++; return "x"; }, input: async () => "x", notify: () => {} },
 		};
 		await fire(fresh.recorded, "session_start", {}, uiCtx2);
 		assert.equal(askedAgain, 0);
@@ -175,15 +182,15 @@ test("language ask-once: skips and non-tui modes never write", async () => {
 	factory(pi as never);
 	const dir = mkdtempSync(join(tmpdir(), "sw-ask2-"));
 	try {
-		// user skips everything: no file, no ask on the next event
-		let asked = 0;
+		// user Escapes every selector: no file, nothing persisted
+		let selects = 0;
 		const skipCtx = {
 			cwd: dir,
 			mode: "tui",
-			ui: { input: async () => { asked++; return ""; }, notify: () => {} },
+			ui: { select: async () => { selects++; return undefined; }, input: async () => "x", notify: () => {} },
 		};
 		await fire(recorded, "session_start", {}, skipCtx);
-		assert.equal(asked, 3);
+		assert.equal(selects, 3);
 		assert.equal(existsSync(join(dir, ".pi", "switchman.json")), false);
 
 		// non-tui (print/rpc) is never asked
@@ -191,7 +198,7 @@ test("language ask-once: skips and non-tui modes never write", async () => {
 		await fire(recorded, "session_start", {}, {
 			cwd: join(dir, "elsewhere"),
 			mode: "print",
-			ui: { input: async () => { askedTui++; return "x"; }, notify: () => {} },
+			ui: { select: async () => { askedTui++; return "x"; }, input: async () => "x", notify: () => {} },
 		});
 		assert.equal(askedTui, 0);
 	} finally {
