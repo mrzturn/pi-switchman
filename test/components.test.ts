@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { DEFAULT_CONFIG, mergeConfig, readRawConfig, writeRawConfig } from "../src/config.ts";
 import { currentPhysicalModel, ledgerFromBranch, ledgerSummary } from "../src/ledger.ts";
-import { finalOutput, parseChildLine } from "../src/child.ts";
+import { childEnv, finalOutput, parseChildLine } from "../src/child.ts";
 import { discoverAgents } from "../src/agents.ts";
 import { filterModels, laneRows, mainRows } from "../src/config-ui.ts";
 import { tierOf } from "../src/watermark.ts";
@@ -154,4 +154,21 @@ test("discoverAgents: built-in floor when no agent dirs exist (project scope)", 
 	const scout = agents.find((a) => a.name === "scout");
 	assert.match(scout?.systemPrompt ?? "", /codebase scout/);
 	assert.deepEqual(scout?.tools, ["read", "grep", "glob", "find", "ls"]);
+});
+
+
+test("childEnv strips tmux context so nested dispatches never open watch panes", () => {
+	process.env.TMUX = "/tmp/tmux-0/default,123,0";
+	process.env.TMUX_PANE = "%0";
+	try {
+		const env = childEnv();
+		assert.equal(env.TMUX, undefined);
+		assert.equal(env.TMUX_PANE, undefined);
+		assert.equal(env.HOME, process.env.HOME); // everything else passes through
+		assert.notEqual(env, process.env); // and the parent env is not mutated
+		assert.equal(process.env.TMUX, "/tmp/tmux-0/default,123,0");
+	} finally {
+		delete process.env.TMUX;
+		delete process.env.TMUX_PANE;
+	}
 });

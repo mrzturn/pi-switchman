@@ -85,6 +85,19 @@ export interface SpawnOptions {
 	onMessage?: (message: Message) => void;
 }
 
+/** Child environment: strips the tmux context. A child that dispatches its own
+ *  sub-agents must never open watch panes — its inherited TMUX_PANE points at
+ *  the MAIN session's pane, so the child's TmuxWatch would split the main
+ *  window into competing columns (observed live: a worker's nested dispatch
+ *  spawned a second right column). Pane display is top-level-only; nested
+ *  agents stay background (logs + /switchman-agents). */
+export function childEnv(): NodeJS.ProcessEnv {
+	const env = { ...process.env };
+	delete env.TMUX;
+	delete env.TMUX_PANE;
+	return env;
+}
+
 /** Spawn a pi child in JSON mode and collect its stream. Rejects only on abort;
  *  process failures resolve as exitCode != 0 with stderr populated. */
 export function runPiChild(options: SpawnOptions): Promise<ChildResult> {
@@ -112,6 +125,7 @@ export function runPiChild(options: SpawnOptions): Promise<ChildResult> {
 				cwd: options.cwd,
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
+				env: childEnv(),
 			});
 
 			let wasAborted = false;
