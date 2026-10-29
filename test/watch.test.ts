@@ -87,7 +87,7 @@ test("TmuxWatch: right-column layout, background queue, seamless handoff, fullsc
 	// c (now displayed) and b finish: no queue — panes linger-close (linger 0 in test)
 	watch.detach(c);
 	watch.detach(b);
-	const kills = calls.filter((x) => x[0] === "kill-pane").map((x) => x[3]);
+	const kills = calls.filter((x) => x[0] === "kill-pane").map((x) => x[2]);
 	assert.deepEqual(kills.sort(), ["%1", "%2"], "both right panes closed — main pane returns to full width");
 	assert.ok(!calls.some((x) => x[0] === "new-window" || x[0] === "select-window"), "never leaves the current window");
 });
