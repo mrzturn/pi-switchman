@@ -103,10 +103,12 @@ export type TmuxRunner = (binary: string, args: string[]) => { status: number | 
 
 const spawnRunner: TmuxRunner = (binary, args) => {
 	const run = spawnSync(binary, args, { encoding: "utf8", timeout: 5000 });
-	try {
-		appendFileSync("/tmp/switchman-tmux-debug.log", `[${new Date().toISOString()}] pid=${process.pid} ${binary} ${args.map((a) => JSON.stringify(a)).join(" ")} -> status=${run.status} out=${JSON.stringify(run.stdout?.slice(0, 120))} err=${JSON.stringify(run.stderr?.slice(0, 120))}\n`);
-	} catch {
-		/* debug trace never breaks the watch */
+	if (process.env.SWITCHMAN_TMUX_DEBUG === "1") {
+		try {
+			appendFileSync("/tmp/switchman-tmux-debug.log", `[${new Date().toISOString()}] pid=${process.pid} ${binary} ${args.map((a) => JSON.stringify(a)).join(" ")} -> status=${run.status} out=${JSON.stringify(run.stdout?.slice(0, 120))} err=${JSON.stringify(run.stderr?.slice(0, 120))}\n`);
+		} catch {
+			/* debug trace never breaks the watch */
+		}
 	}
 	return { status: run.status, stdout: run.stdout ?? "", stderr: run.stderr ?? "" };
 };
